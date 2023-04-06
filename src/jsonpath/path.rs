@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
 /// Represents a set of JSON Path chains.
 #[derive(Debug, Clone, PartialEq)]
-pub struct JsonPath {
-    pub paths: Vec<Path>,
+pub struct JsonPath<'a> {
+    pub paths: Vec<Path<'a>>,
 }
 
 /// Represents a valid JSON Path.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Path {
+pub enum Path<'a> {
     /// `$` represents the root node or element.
     Root,
     /// `@` represents the current node or element being processed in the filter expression.
@@ -34,14 +35,16 @@ pub enum Path {
     DescentWildcard,
     /// `[*]` represents selecting all elements in an Array or Object.
     BracketWildcard,
+    /// `:<name> represents selecting element that matched the name in an Object, like `$:event`.
+    ColonField(Cow<'a, str>),
     /// `.<name> represents selecting element that matched the name in an Object, like `$.event`.
-    DotField(String),
+    DotField(Cow<'a, str>),
     /// `..<name> represents recursive selecting all elements that matched the name, like `$..event`.
-    DescentField(String),
+    DescentField(Cow<'a, str>),
     /// `['<name>'] represents selecting element that matched the name in an Object, like `$['event']`.
-    ObjectField(String),
+    ObjectField(Cow<'a, str>),
     /// `['<name1>','<name2>',..] represents selecting elements that matched one of the names in an Object, like `$['event', 'author']`.
-    ObjectFields(Vec<String>),
+    ObjectFields(Vec<Cow<'a, str>>),
     /// `[<index>] represents selecting element specified by the index in an Array, like `$[1]`. Index is 0-based.
     ArrayIndex(i32),
     /// `[<index1>,<index2>,..] represents selecting elements specified by the indices in an Array, like `$[1,2]`.
@@ -56,12 +59,12 @@ pub enum Path {
         step: Option<u32>,
     },
     /// `[?(<expression>)]` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
-    FilterExpr(Box<Expr>),
+    FilterExpr(Box<Expr<'a>>),
 }
 
 /// Represents a literal value used in filter expression.
 #[derive(Debug, Clone, PartialEq)]
-pub enum PathValue {
+pub enum PathValue<'a> {
     /// Null value.
     Null,
     /// Boolean value.
@@ -73,7 +76,7 @@ pub enum PathValue {
     /// 64-bit floating point.
     Float64(f64),
     /// UTF-8 string.
-    String(String),
+    String(Cow<'a, str>),
 }
 
 /// Represents the operators used in filter expression.
@@ -111,20 +114,20 @@ pub enum BinaryOperator {
 
 /// Represents a filter expression used to filter Array or Object.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum Expr<'a> {
     /// JSON Path chains.
-    Paths(Vec<Path>),
+    Paths(Vec<Path<'a>>),
     /// Literal value.
-    Value(Box<PathValue>),
+    Value(Box<PathValue<'a>>),
     /// Filter expression that performs a binary operation, returns a boolean value.
     BinaryOp {
         op: BinaryOperator,
-        left: Box<Expr>,
-        right: Box<Expr>,
+        left: Box<Expr<'a>>,
+        right: Box<Expr<'a>>,
     },
 }
 
-impl Display for JsonPath {
+impl<'a> Display for JsonPath<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for path in &self.paths {
             write!(f, "{path}")?;
@@ -133,7 +136,7 @@ impl Display for JsonPath {
     }
 }
 
-impl Display for Path {
+impl<'a> Display for Path<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Path::Root => {
@@ -150,6 +153,9 @@ impl Display for Path {
             }
             Path::BracketWildcard => {
                 write!(f, "[*]")?;
+            }
+            Path::ColonField(field) => {
+                write!(f, ":{field}")?;
             }
             Path::DotField(field) => {
                 write!(f, ".{field}")?;
@@ -206,7 +212,7 @@ impl Display for Path {
     }
 }
 
-impl Display for PathValue {
+impl<'a> Display for PathValue<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             PathValue::Null => {
@@ -284,7 +290,7 @@ impl Display for BinaryOperator {
     }
 }
 
-impl Display for Expr {
+impl<'a> Display for Expr<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Paths(paths) => {

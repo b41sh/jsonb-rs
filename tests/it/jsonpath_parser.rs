@@ -42,7 +42,7 @@ fn test_json_path() {
     ];
 
     for case in cases {
-        let json_path = parse_json_path(case).unwrap();
+        let json_path = parse_json_path(case.as_bytes()).unwrap();
         writeln!(file, "---------- Input ----------").unwrap();
         writeln!(file, "{}", case).unwrap();
         writeln!(file, "---------- Output ---------").unwrap();
@@ -71,7 +71,7 @@ fn test_json_path_error() {
     ];
 
     for case in cases {
-        let res = parse_json_path(case);
+        let res = parse_json_path(case.as_bytes());
         assert!(res.is_err());
     }
 }

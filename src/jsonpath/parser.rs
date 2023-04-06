@@ -25,9 +25,10 @@ use nom::{
 
 use crate::error::Error;
 use crate::jsonpath::path::*;
+use std::borrow::Cow;
 
 /// Parsing the input string to JSON Path.
-pub fn parse_json_path(input: &str) -> Result<JsonPath, Error> {
+pub fn parse_json_path<'a>(input: &'a [u8]) -> Result<JsonPath<'a>, Error> {
     match json_path(input) {
         Ok((rest, json_path)) => {
             if !rest.is_empty() {
@@ -40,24 +41,24 @@ pub fn parse_json_path(input: &str) -> Result<JsonPath, Error> {
     }
 }
 
-fn json_path(input: &str) -> IResult<&str, JsonPath> {
+fn json_path<'a>(input: &'a [u8]) -> IResult<&'a [u8], JsonPath<'a>> {
     map(delimited(multispace0, many1(path), multispace0), |paths| {
         JsonPath { paths }
     })(input)
 }
 
-fn raw_string(input: &str) -> IResult<&str, &str> {
+fn raw_string<'a>(input: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     escaped(alphanumeric1, '\\', one_of("\"n\\"))(input)
 }
 
-fn string(input: &str) -> IResult<&str, &str> {
+fn string<'a>(input: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     alt((
         delimited(char('\''), raw_string, char('\'')),
         delimited(char('"'), raw_string, char('"')),
     ))(input)
 }
 
-fn bracket_wildcard(input: &str) -> IResult<&str, ()> {
+fn bracket_wildcard<'a>(input: &'a [u8]) -> IResult<&'a [u8], ()> {
     value(
         (),
         delimited(
@@ -68,15 +69,19 @@ fn bracket_wildcard(input: &str) -> IResult<&str, ()> {
     )(input)
 }
 
-fn dot_field(input: &str) -> IResult<&str, &str> {
+fn colon_field<'a>(input: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
+    preceded(char(':'), alphanumeric1)(input)
+}
+
+fn dot_field<'a>(input: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     preceded(char('.'), alphanumeric1)(input)
 }
 
-fn descent_field(input: &str) -> IResult<&str, &str> {
+fn descent_field<'a>(input: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     preceded(tag(".."), alphanumeric1)(input)
 }
 
-fn array_index(input: &str) -> IResult<&str, i32> {
+fn array_index<'a>(input: &'a [u8]) -> IResult<&'a [u8], i32> {
     delimited(
         terminated(char('['), multispace0),
         i32,
@@ -84,7 +89,7 @@ fn array_index(input: &str) -> IResult<&str, i32> {
     )(input)
 }
 
-fn array_indices(input: &str) -> IResult<&str, Vec<i32>> {
+fn array_indices<'a>(input: &'a [u8]) -> IResult<&'a [u8], Vec<i32>> {
     delimited(
         terminated(char('['), multispace0),
         separated_list1(delimited(multispace0, char(','), multispace0), i32),
@@ -92,7 +97,7 @@ fn array_indices(input: &str) -> IResult<&str, Vec<i32>> {
     )(input)
 }
 
-fn object_field(input: &str) -> IResult<&str, &str> {
+fn object_field<'a>(input: &'a [u8]) -> IResult<&'a [u8], &'a [u8]> {
     delimited(
         terminated(char('['), multispace0),
         string,
@@ -100,7 +105,7 @@ fn object_field(input: &str) -> IResult<&str, &str> {
     )(input)
 }
 
-fn object_fields(input: &str) -> IResult<&str, Vec<&str>> {
+fn object_fields<'a>(input: &'a [u8]) -> IResult<&'a [u8], Vec<&'a [u8]>> {
     delimited(
         terminated(char('['), multispace0),
         separated_list1(delimited(multispace0, char(','), multispace0), string),
@@ -108,7 +113,7 @@ fn object_fields(input: &str) -> IResult<&str, Vec<&str>> {
     )(input)
 }
 
-fn array_slice(input: &str) -> IResult<&str, Path> {
+fn array_slice<'a>(input: &'a [u8]) -> IResult<&'a [u8], Path<'a>> {
     map(
         delimited(
             char('['),
@@ -131,20 +136,32 @@ fn array_slice(input: &str) -> IResult<&str, Path> {
     )(input)
 }
 
-fn path(input: &str) -> IResult<&str, Path> {
+fn path<'a>(input: &'a [u8]) -> IResult<&'a [u8], Path<'a>> {
     alt((
         value(Path::Root, char('$')),
         value(Path::Current, char('@')),
         value(Path::DotWildcard, tag(".*")),
         value(Path::DescentWildcard, tag("..*")),
         value(Path::BracketWildcard, bracket_wildcard),
-        map(dot_field, |v| Path::DotField(v.to_string())),
-        map(descent_field, |v| Path::DescentField(v.to_string())),
+        map(colon_field, |v| {
+            Path::ColonField(Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(v) }))
+        }),
+        map(dot_field, |v| {
+            Path::DotField(Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(v) }))
+        }),
+        map(descent_field, |v| {
+            Path::DescentField(Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(v) }))
+        }),
         map(array_index, Path::ArrayIndex),
         map(array_indices, Path::ArrayIndices),
-        map(object_field, |v| Path::ObjectField(v.to_string())),
+        map(object_field, |v| {
+            Path::ObjectField(Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(v) }))
+        }),
         map(object_fields, |v| {
-            let fields = v.iter().map(|s| s.to_string()).collect();
+            let fields = v
+                .iter()
+                .map(|s| Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(s) }))
+                .collect();
             Path::ObjectFields(fields)
         }),
         map(array_slice, |v| v),
@@ -152,7 +169,7 @@ fn path(input: &str) -> IResult<&str, Path> {
     ))(input)
 }
 
-fn filter_expr(input: &str) -> IResult<&str, Expr> {
+fn filter_expr<'a>(input: &'a [u8]) -> IResult<&'a [u8], Expr<'a>> {
     map(
         delimited(
             tag("[?("),
@@ -163,11 +180,11 @@ fn filter_expr(input: &str) -> IResult<&str, Expr> {
     )(input)
 }
 
-fn paths(input: &str) -> IResult<&str, Vec<Path>> {
+fn paths<'a>(input: &'a [u8]) -> IResult<&'a [u8], Vec<Path<'a>>> {
     many1(path)(input)
 }
 
-fn op(input: &str) -> IResult<&str, BinaryOperator> {
+fn op<'a>(input: &'a [u8]) -> IResult<&'a [u8], BinaryOperator> {
     alt((
         value(BinaryOperator::Eq, tag("==")),
         value(BinaryOperator::NotEq, tag("!=")),
@@ -186,7 +203,7 @@ fn op(input: &str) -> IResult<&str, BinaryOperator> {
     ))(input)
 }
 
-fn path_value(input: &str) -> IResult<&str, PathValue> {
+fn path_value<'a>(input: &'a [u8]) -> IResult<&'a [u8], PathValue<'a>> {
     alt((
         value(PathValue::Null, tag("null")),
         value(PathValue::Boolean(true), tag("true")),
@@ -194,18 +211,20 @@ fn path_value(input: &str) -> IResult<&str, PathValue> {
         map(u64, PathValue::UInt64),
         map(i64, PathValue::Int64),
         map(double, PathValue::Float64),
-        map(string, |v| PathValue::String(v.to_string())),
+        map(string, |v| {
+            PathValue::String(Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(v) }))
+        }),
     ))(input)
 }
 
-fn sub_expr(input: &str) -> IResult<&str, Expr> {
+fn sub_expr<'a>(input: &'a [u8]) -> IResult<&'a [u8], Expr<'a>> {
     alt((
         map(paths, Expr::Paths),
         map(path_value, |v| Expr::Value(Box::new(v))),
     ))(input)
 }
 
-fn expr(input: &str) -> IResult<&str, Expr> {
+fn expr<'a>(input: &'a [u8]) -> IResult<&'a [u8], Expr<'a>> {
     // TODO, support more complex expressions.
     alt((
         map(
