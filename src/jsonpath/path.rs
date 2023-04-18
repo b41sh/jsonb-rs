@@ -13,8 +13,11 @@
 // limitations under the License.
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::fmt::Display;
 use std::fmt::Formatter;
+
+use crate::number::Number;
 
 /// Represents a set of JSON Path chains.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,50 +34,43 @@ pub enum Path<'a> {
     Current,
     /// `.*` represents selecting all elements in an Array or Object.
     DotWildcard,
-    /// `..*` represents recursive selecting all elements in an Array or Object.
-    DescentWildcard,
     /// `[*]` represents selecting all elements in an Array or Object.
     BracketWildcard,
     /// `:<name> represents selecting element that matched the name in an Object, like `$:event`.
     ColonField(Cow<'a, str>),
     /// `.<name> represents selecting element that matched the name in an Object, like `$.event`.
     DotField(Cow<'a, str>),
-    /// `..<name> represents recursive selecting all elements that matched the name, like `$..event`.
-    DescentField(Cow<'a, str>),
     /// `['<name>'] represents selecting element that matched the name in an Object, like `$['event']`.
     ObjectField(Cow<'a, str>),
-    /// `['<name1>','<name2>',..] represents selecting elements that matched one of the names in an Object, like `$['event', 'author']`.
-    ObjectFields(Vec<Cow<'a, str>>),
-    /// `[<index>] represents selecting element specified by the index in an Array, like `$[1]`. Index is 0-based.
-    ArrayIndex(i32),
     /// `[<index1>,<index2>,..] represents selecting elements specified by the indices in an Array, like `$[1,2]`.
-    ArrayIndices(Vec<i32>),
-    /// `[<start>:<end>:<step>] represents selecting elements indexed between start and end with a step in an Array, like `$[0:4:2]`.
-    /// If start is omitted, selecting from the first element of the Array, like `$[:3]`.
-    /// If end is omitted, selecting from start until the last element of the Array, like `$[1:]`.
-    /// If step is not specified, the default value of 1 is used.
-    ArraySlice {
-        start: Option<i32>,
-        end: Option<i32>,
-        step: Option<u32>,
-    },
-    /// `[?(<expression>)]` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
+    ArrayIndices(Vec<ArrayIndex>),
+    /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
     FilterExpr(Box<Expr<'a>>),
 }
 
 /// Represents a literal value used in filter expression.
 #[derive(Debug, Clone, PartialEq)]
+pub enum Index {
+    Index(i32),
+    LastIndex(i32),
+}
+
+/// Represents a literal value used in filter expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArrayIndex {
+    Index(Index),
+    Slice((Index, Index)),
+}
+
+/// Represents a literal value used in filter expression.
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum PathValue<'a> {
     /// Null value.
     Null,
     /// Boolean value.
     Boolean(bool),
-    /// 64-bit unsigned integer.
-    UInt64(u64),
-    /// 64-bit signed integer.
-    Int64(i64),
-    /// 64-bit floating point.
-    Float64(f64),
+    /// Number value.
+    Number(Number),
     /// UTF-8 string.
     String(Cow<'a, str>),
 }
@@ -82,6 +78,10 @@ pub enum PathValue<'a> {
 /// Represents the operators used in filter expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinaryOperator {
+    /// `&&` represents logical And operation.
+    And,
+    /// `||` represents logical Or operation.
+    Or,
     /// `==` represents left is equal to right.
     Eq,
     /// `!=` represents left is not equal to right.
@@ -94,22 +94,6 @@ pub enum BinaryOperator {
     Gt,
     /// `>=` represents left is greater than or equal to right.
     Gte,
-    /// `=~` represents left matches regular expression, like `[?(@.name =~ /foo.*?/i)]`.
-    Match,
-    /// `in` represents left exists in right, like `[?(@.size in ['S', 'M'])]`.
-    In,
-    /// `nin` represents left does not exists in right.
-    Nin,
-    /// `subsetof` represents left is a subset of right, like `[?(@.sizes subsetof ['S', 'M', 'L'])]`.
-    Subsetof,
-    /// `anyof` represents left has an intersection with right, like `[?(@.sizes anyof ['M', 'L'])]`.
-    Anyof,
-    /// `noneof` represents left has no intersection with right, like `[?(@.sizes noneof ['M', 'L'])]`.
-    Noneof,
-    /// `size` represents size of left (Array or String) should match right.
-    Size,
-    /// `empty` represents left (Array or String) should be empty or not empty.
-    Empty,
 }
 
 /// Represents a filter expression used to filter Array or Object.
@@ -136,6 +120,43 @@ impl<'a> Display for JsonPath<'a> {
     }
 }
 
+impl Display for Index {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Index::Index(idx) => {
+                write!(f, "{idx}")?;
+            }
+            Index::LastIndex(idx) => {
+                write!(f, "last")?;
+                match idx.cmp(&0) {
+                    Ordering::Greater => {
+                        write!(f, "+{idx}")?;
+                    },
+                    Ordering::Less => {
+                        write!(f, "{idx}")?;
+                    },
+                    Ordering::Equal => {},
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Display for ArrayIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArrayIndex::Index(idx) => {
+                write!(f, "{idx}")?;
+            }
+            ArrayIndex::Slice((start, end)) => {
+                write!(f, "{start} to {end}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<'a> Display for Path<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -148,9 +169,6 @@ impl<'a> Display for Path<'a> {
             Path::DotWildcard => {
                 write!(f, ".*")?;
             }
-            Path::DescentWildcard => {
-                write!(f, "..*")?;
-            }
             Path::BracketWildcard => {
                 write!(f, "[*]")?;
             }
@@ -160,24 +178,8 @@ impl<'a> Display for Path<'a> {
             Path::DotField(field) => {
                 write!(f, ".{field}")?;
             }
-            Path::DescentField(field) => {
-                write!(f, "..{field}")?;
-            }
             Path::ObjectField(field) => {
-                write!(f, "['{field}']")?;
-            }
-            Path::ObjectFields(fields) => {
-                write!(f, "[")?;
-                for (i, field) in fields.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "'{field}'")?;
-                }
-                write!(f, "]")?;
-            }
-            Path::ArrayIndex(index) => {
-                write!(f, "[{index}]")?;
+                write!(f, "[\"{field}\"]")?;
             }
             Path::ArrayIndices(indices) => {
                 write!(f, "[")?;
@@ -189,23 +191,8 @@ impl<'a> Display for Path<'a> {
                 }
                 write!(f, "]")?;
             }
-            Path::ArraySlice { start, end, step } => {
-                write!(f, "[")?;
-                if let Some(start) = start {
-                    write!(f, "{start}")?;
-                }
-                write!(f, ":")?;
-                if let Some(end) = end {
-                    write!(f, "{end}")?;
-                }
-                if let Some(step) = step {
-                    write!(f, ":")?;
-                    write!(f, "{step}")?;
-                }
-                write!(f, "]")?;
-            }
             Path::FilterExpr(expr) => {
-                write!(f, "[?({expr})]")?;
+                write!(f, "?({expr})")?;
             }
         }
         Ok(())
@@ -225,17 +212,11 @@ impl<'a> Display for PathValue<'a> {
                     write!(f, "false")
                 }
             }
-            PathValue::UInt64(v) => {
-                write!(f, "{v}")
-            }
-            PathValue::Int64(v) => {
-                write!(f, "{v}")
-            }
-            PathValue::Float64(v) => {
+            PathValue::Number(v) => {
                 write!(f, "{v}")
             }
             PathValue::String(v) => {
-                write!(f, "\'{v}\'")
+                write!(f, "\"{v}\"")
             }
         }
     }
@@ -244,6 +225,12 @@ impl<'a> Display for PathValue<'a> {
 impl Display for BinaryOperator {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            BinaryOperator::And => {
+                write!(f, "&&")
+            }
+            BinaryOperator::Or => {
+                write!(f, "||")
+            }
             BinaryOperator::Eq => {
                 write!(f, "==")
             }
@@ -262,30 +249,6 @@ impl Display for BinaryOperator {
             BinaryOperator::Gte => {
                 write!(f, ">=")
             }
-            BinaryOperator::Match => {
-                write!(f, "=~")
-            }
-            BinaryOperator::In => {
-                write!(f, "in")
-            }
-            BinaryOperator::Nin => {
-                write!(f, "nin")
-            }
-            BinaryOperator::Subsetof => {
-                write!(f, "subsetOf")
-            }
-            BinaryOperator::Anyof => {
-                write!(f, "anyOf")
-            }
-            BinaryOperator::Noneof => {
-                write!(f, "noneOf")
-            }
-            BinaryOperator::Size => {
-                write!(f, "size")
-            }
-            BinaryOperator::Empty => {
-                write!(f, "empty")
-            }
         }
     }
 }
@@ -302,7 +265,25 @@ impl<'a> Display for Expr<'a> {
                 write!(f, "{v}")?;
             }
             Expr::BinaryOp { op, left, right } => {
-                write!(f, "{left} {op} {right}")?;
+                if let Expr::BinaryOp { op: left_op, .. } = &**left {
+                    if left_op == &BinaryOperator::And || left_op == &BinaryOperator::Or {
+                        write!(f, "({left})")?;
+                    } else {
+                        write!(f, "{left}")?;
+                    }
+                } else {
+                    write!(f, "{left}")?;
+                }
+                write!(f, " {op} ")?;
+                if let Expr::BinaryOp { op: right_op, .. } = &**right {
+                    if right_op == &BinaryOperator::And || right_op == &BinaryOperator::Or {
+                        write!(f, "({right})")?;
+                    } else {
+                        write!(f, "{right}")?;
+                    }
+                } else {
+                    write!(f, "{right}")?;
+                }
             }
         }
         Ok(())

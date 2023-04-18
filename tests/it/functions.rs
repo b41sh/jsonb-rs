@@ -22,6 +22,10 @@ use jsonb::{
     JsonPathRef, Number, Object, Value,
 };
 
+use jsonb::jsonpath::parse_json_path as parse_json_path2;
+//use jsonb::get_by_npath;
+use jsonb::jsonpath::Selector;
+
 #[test]
 fn test_build_array() {
     let sources = vec![
@@ -173,6 +177,80 @@ fn test_get_by_path() {
             None => assert_eq!(res, None),
         }
         buf.clear();
+    }
+}
+
+#[test]
+fn test_get_by_npath() {
+    let source = r#"{"name":"Fred","phones":[{"type":"home","number":3720453},{"type":"work","number":5062051}]}"#;
+
+    let paths = vec![
+        (r#"$.name"#, vec![r#""Fred""#]),
+        (
+            r#"$.phones"#,
+            vec![r#"[{"type":"home","number":3720453},{"type":"work","number":5062051}]"#],
+        ),
+        (r#"$.phones.*"#, vec![]),
+        (
+            r#"$.phones[*]"#,
+            vec![
+                r#"{"type":"home","number":3720453}"#,
+                r#"{"type":"work","number":5062051}"#,
+            ],
+        ),
+        (r#"$.phones[0].*"#, vec![r#"3720453"#, r#""home""#]),
+        (r#"$.phones[0].type"#, vec![r#""home""#]),
+        (r#"$.phones[*].type[*]"#, vec![r#""home""#, r#""work""#]),
+        (
+            r#"$.phones[0 to last].number"#,
+            vec![r#"3720453"#, r#"5062051"#],
+        ),
+        (
+            r#"$.phones[0 to last]?(4 == 4)"#,
+            vec![
+                r#"{"type":"home","number":3720453}"#,
+                r#"{"type":"work","number":5062051}"#,
+            ],
+        ),
+        (
+            r#"$.phones[0 to last]?(@.type == "home")"#,
+            vec![r#"{"type":"home","number":3720453}"#],
+        ),
+        (
+            r#"$.phones[0 to last]?(@.number == 3720453)"#,
+            vec![r#"{"type":"home","number":3720453}"#],
+        ),
+        (
+            r#"$.phones[0 to last]?(@.number == 3720453 || @.type == "work")"#,
+            vec![
+                r#"{"type":"home","number":3720453}"#,
+                r#"{"type":"work","number":5062051}"#,
+            ],
+        ),
+        (
+            r#"$.phones[0 to last]?(@.number == 3720453 && @.type == "work")"#,
+            vec![],
+        ),
+    ];
+
+    let mut buf: Vec<u8> = Vec::new();
+    let value = parse_value(source.as_bytes()).unwrap();
+    value.write_to_vec(&mut buf);
+    for (path, expects) in paths {
+        println!("\n--path={:?}", path);
+        let json_path = parse_json_path2(path.as_bytes()).unwrap();
+        let selector = Selector::new(json_path);
+        let res = selector.select(&buf).unwrap();
+        println!("res.len()={:?}", res.len());
+        assert_eq!(res.len(), expects.len());
+        for (val, expect) in res.into_iter().zip(expects.iter()) {
+            println!("lval={:?}", val);
+            let mut val_buf: Vec<u8> = Vec::new();
+            let val_expect = parse_value(expect.as_bytes()).unwrap();
+            val_expect.write_to_vec(&mut val_buf);
+            println!("rval={:?}", val_buf);
+            assert_eq!(val, val_buf);
+        }
     }
 }
 

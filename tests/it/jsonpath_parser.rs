@@ -24,25 +24,28 @@ fn test_json_path() {
     let cases = &[
         r#"$"#,
         r#"$.*"#,
-        r#"$..*"#,
         r#"$[*]"#,
+        r#"$.store.book[*].*"#,
         r#"$.store.book[0].price"#,
-        r#"$.store.book[-1].isbn"#,
-        r#"$..book[0,1].price"#,
-        r#"$..book[0:2]"#,
-        r#"$..book[:2]"#,
-        r#"$..book[-2:]"#,
-        r#"$..book[0:4:2]"#,
-        r#"$..book[:]['category']"#,
-        r#"$..book[*]['category', 'author']"#,
-        r#"$.store.book[?(@.isbn)].price"#,
-        r#"$.store.book[?(@.price > 10)].title"#,
-        r#"$.store.book[?(@.price < $.expensive)].price"#,
-        r#"$.store.book[:].price"#,
+        r#"$.store.book[last].isbn"#,
+        r#"$.store.book[0,1, last - 2].price"#,
+        r#"$.store.book[0,1 to last-1]"#,
+        r#"$.store.book?(@.isbn).price"#,
+        r#"$.store.book?(@.price > 10).title"#,
+        r#"$.store.book?(@.price < $.expensive).price"#,
+        r#"$."store":book["price"]"#,
+        r#"$.store.book?(@.price < 10 && @.category == "fiction")"#,
+        r#"$.store.book?(@.price > 10 || @.category == "reference")"#,
+        r#"$.store.book?(@.price > 20 && (@.category == "reference" || @.category == "fiction"))"#,
     ];
 
     for case in cases {
-        let json_path = parse_json_path(case.as_bytes()).unwrap();
+        println!("\n---case={:?}", case);
+        //let json_path = parse_json_path(case.as_bytes()).unwrap();
+        let json_path = parse_json_path(case.as_bytes());
+        println!("json_path={:?}", json_path);
+        let json_path = json_path.unwrap();
+
         writeln!(file, "---------- Input ----------").unwrap();
         writeln!(file, "{}", case).unwrap();
         writeln!(file, "---------- Output ---------").unwrap();
