@@ -59,7 +59,6 @@ fn test_json_path() {
 #[test]
 fn test_json_path_error() {
     let cases = &[
-        r#"x"#,
         r#"$.["#,
         r#"$X"#,
         r#"$."#,

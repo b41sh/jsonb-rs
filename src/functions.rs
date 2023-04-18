@@ -24,6 +24,8 @@ use super::json_path::JsonPathRef;
 use super::number::Number;
 use super::parser::decode_value;
 use super::value::Value;
+use crate::jsonpath::JsonPath;
+use crate::jsonpath::Selector;
 
 // builtin functions for `JSONB` bytes and `JSON` strings without decode all Values.
 // The input value must be valid `JSONB' or `JSON`.
@@ -200,6 +202,17 @@ pub fn get_by_name_ignore_case(value: &[u8], name: &str) -> Option<Vec<u8>> {
             None
         }
         _ => None,
+    }
+}
+
+pub fn get_by_path2<'a>(value: &'a [u8], json_path: JsonPath<'a>) -> Result<Vec<Vec<u8>>, Error> {
+    let selector = Selector::new(json_path);
+    if !is_jsonb(value) {
+        let json_value = decode_value(value).unwrap();
+        let value = json_value.to_vec();
+        selector.select(value.as_slice())
+    } else {
+        selector.select(value)
     }
 }
 

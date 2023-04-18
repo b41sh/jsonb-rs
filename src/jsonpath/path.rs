@@ -32,17 +32,17 @@ pub enum Path<'a> {
     Root,
     /// `@` represents the current node or element being processed in the filter expression.
     Current,
-    /// `.*` represents selecting all elements in an Array or Object.
+    /// `.*` represents selecting all elements in an Object.
     DotWildcard,
-    /// `[*]` represents selecting all elements in an Array or Object.
+    /// `[*]` represents selecting all elements in an Array.
     BracketWildcard,
-    /// `:<name> represents selecting element that matched the name in an Object, like `$:event`.
+    /// `:<name>` represents selecting element that matched the name in an Object, like `$:event`.
     ColonField(Cow<'a, str>),
-    /// `.<name> represents selecting element that matched the name in an Object, like `$.event`.
+    /// `.<name>` represents selecting element that matched the name in an Object, like `$.event`.
     DotField(Cow<'a, str>),
-    /// `['<name>'] represents selecting element that matched the name in an Object, like `$['event']`.
+    /// `['<name>']` represents selecting element that matched the name in an Object, like `$['event']`.
     ObjectField(Cow<'a, str>),
-    /// `[<index1>,<index2>,..] represents selecting elements specified by the indices in an Array, like `$[1,2]`.
+    /// `[<index1>,<index2>,..]` represents selecting elements specified by the indices in an Array, like `$[1,2]`.
     ArrayIndices(Vec<ArrayIndex>),
     /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
     FilterExpr(Box<Expr<'a>>),
@@ -131,11 +131,11 @@ impl Display for Index {
                 match idx.cmp(&0) {
                     Ordering::Greater => {
                         write!(f, "+{idx}")?;
-                    },
+                    }
                     Ordering::Less => {
                         write!(f, "{idx}")?;
-                    },
-                    Ordering::Equal => {},
+                    }
+                    Ordering::Equal => {}
                 }
             }
         }

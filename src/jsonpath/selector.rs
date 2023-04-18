@@ -16,8 +16,8 @@ use byteorder::BigEndian;
 use byteorder::WriteBytesExt;
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
 use std::cmp::Ordering;
+use std::collections::VecDeque;
 
 use crate::constants::*;
 use crate::error::*;
@@ -31,13 +31,8 @@ use crate::jsonpath::PathValue;
 use crate::number::Number;
 
 use nom::{
-    bytes::complete::take,
-    combinator::map,
-    multi::count,
-    number::complete::be_u32,
-    IResult,
+    bytes::complete::take, combinator::map, multi::count, number::complete::be_u32, IResult,
 };
-
 
 #[derive(Debug)]
 enum Item<'a> {
@@ -47,8 +42,6 @@ enum Item<'a> {
 
 #[derive(Debug)]
 enum ExprValue<'a> {
-    //Items(Vec<Vec<u8>>),
-    //Items(Vec<Vec<u8>>),
     Values(Vec<PathValue<'a>>),
     Value(Box<PathValue<'a>>),
 }
@@ -218,24 +211,12 @@ impl<'a> Selector<'a> {
         let order = lhs.partial_cmp(&rhs);
         if let Some(order) = order {
             match op {
-                BinaryOperator::Eq => {
-                    order == Ordering::Equal
-                }
-                BinaryOperator::NotEq => {
-                    order != Ordering::Equal
-                }
-                BinaryOperator::Lt => {
-                    order == Ordering::Less
-                }
-                BinaryOperator::Lte => {
-                    order == Ordering::Equal || order == Ordering::Less
-                }
-                BinaryOperator::Gt => {
-                    order == Ordering::Greater
-                }
-                BinaryOperator::Gte => {
-                    order == Ordering::Equal || order == Ordering::Greater
-                }
+                BinaryOperator::Eq => order == Ordering::Equal,
+                BinaryOperator::NotEq => order != Ordering::Equal,
+                BinaryOperator::Lt => order == Ordering::Less,
+                BinaryOperator::Lte => order == Ordering::Equal || order == Ordering::Less,
+                BinaryOperator::Gt => order == Ordering::Greater,
+                BinaryOperator::Gte => order == Ordering::Equal || order == Ordering::Greater,
                 _ => unreachable!(),
             }
         } else {
@@ -313,12 +294,7 @@ impl<'a> Selector<'a> {
         }
     }
 
-    fn select_by_name(
-        &'a self,
-        current: &'a [u8],
-        name: &str,
-        items: &mut VecDeque<Item<'a>>,
-    ) {
+    fn select_by_name(&'a self, current: &'a [u8], name: &str, items: &mut VecDeque<Item<'a>>) {
         let (rest, (ty, length)) = decode_header(current).unwrap();
         if ty != OBJECT_CONTAINER_TAG || length == 0 {
             return;

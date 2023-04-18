@@ -16,7 +16,7 @@ use nom::{
     branch::alt,
     bytes::complete::{escaped, tag, tag_no_case},
     character::complete::{alphanumeric1, char, i32, i64, multispace0, one_of, u64},
-    combinator::{map, value},
+    combinator::{map, opt, value},
     multi::{many0, separated_list1},
     number::complete::double,
     sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
@@ -37,9 +37,7 @@ pub fn parse_json_path(input: &[u8]) -> Result<JsonPath<'_>, Error> {
             }
             Ok(json_path)
         }
-        Err(nom::Err::Error(_err) | nom::Err::Failure(_err)) => {
-            Err(Error::InvalidJsonb)
-        }
+        Err(nom::Err::Error(_err) | nom::Err::Failure(_err)) => Err(Error::InvalidJsonb),
         Err(nom::Err::Incomplete(_)) => unreachable!(),
     }
 }
@@ -148,6 +146,16 @@ fn inner_path(input: &[u8]) -> IResult<&[u8], Path<'_>> {
     ))(input)
 }
 
+// Compatible with Snowflake query syntax, the first field name does not require the leading period
+fn pre_path(input: &[u8]) -> IResult<&[u8], Path<'_>> {
+    alt((
+        value(Path::Root, char('$')),
+        map(alphanumeric1, |v| {
+            Path::DotField(Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(v) }))
+        }),
+    ))(input)
+}
+
 fn path(input: &[u8]) -> IResult<&[u8], Path<'_>> {
     alt((
         map(inner_path, |v| v),
@@ -158,11 +166,13 @@ fn path(input: &[u8]) -> IResult<&[u8], Path<'_>> {
 fn paths(input: &[u8]) -> IResult<&[u8], Vec<Path<'_>>> {
     map(
         pair(
-            value(Path::Root, char('$')),
+            opt(pre_path),
             delimited(multispace0, many0(path), multispace0),
         ),
-        |(pre_path, mut paths)| {
-            paths.insert(0, pre_path);
+        |(opt_pre_path, mut paths)| {
+            if let Some(pre_path) = opt_pre_path {
+                paths.insert(0, pre_path);
+            }
             paths
         },
     )(input)
@@ -199,6 +209,7 @@ fn op(input: &[u8]) -> IResult<&[u8], BinaryOperator> {
     alt((
         value(BinaryOperator::Eq, tag("==")),
         value(BinaryOperator::NotEq, tag("!=")),
+        value(BinaryOperator::NotEq, tag("<>")),
         value(BinaryOperator::Lt, char('<')),
         value(BinaryOperator::Lte, tag("<=")),
         value(BinaryOperator::Gt, char('>')),
@@ -228,7 +239,7 @@ fn inner_expr(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
 }
 
 fn expr_atom(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
-    // TODO, support more complex expressions.
+    // TODO, support arithmetic expressions.
     alt((
         map(
             tuple((
