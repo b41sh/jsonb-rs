@@ -24,7 +24,10 @@ use super::json_path::JsonPathRef;
 use super::number::Number;
 use super::parser::decode_value;
 use super::value::Value;
+use crate::jsonpath::ArrayIndex;
+use crate::jsonpath::Index;
 use crate::jsonpath::JsonPath;
+use crate::jsonpath::Path;
 use crate::jsonpath::Selector;
 
 // builtin functions for `JSONB` bytes and `JSON` strings without decode all Values.
@@ -203,6 +206,18 @@ pub fn get_by_name_ignore_case(value: &[u8], name: &str) -> Option<Vec<u8>> {
         }
         _ => None,
     }
+}
+
+pub fn get_by_index<'a>(value: &'a [u8], index: i32) -> Result<Vec<Vec<u8>>, Error> {
+    let path = Path::ArrayIndices(vec![ArrayIndex::Index(Index::Index(index))]);
+    let json_path = JsonPath { paths: vec![path] };
+    get_by_path2(value, json_path)
+}
+
+pub fn get_by_name<'a>(value: &'a [u8], name: Cow<'a, str>) -> Result<Vec<Vec<u8>>, Error> {
+    let path = Path::DotField(name);
+    let json_path = JsonPath { paths: vec![path] };
+    get_by_path2(value, json_path)
 }
 
 pub fn get_by_path2<'a>(value: &'a [u8], json_path: JsonPath<'a>) -> Result<Vec<Vec<u8>>, Error> {
