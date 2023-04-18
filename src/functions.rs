@@ -214,8 +214,8 @@ pub fn get_by_index<'a>(value: &'a [u8], index: i32) -> Result<Vec<Vec<u8>>, Err
     get_by_path2(value, json_path)
 }
 
-pub fn get_by_name<'a>(value: &'a [u8], name: Cow<'a, str>) -> Result<Vec<Vec<u8>>, Error> {
-    let path = Path::DotField(name);
+pub fn get_by_name<'a>(value: &'a [u8], name: &str) -> Result<Vec<Vec<u8>>, Error> {
+    let path = Path::DotField(Cow::Borrowed(name));
     let json_path = JsonPath { paths: vec![path] };
     get_by_path2(value, json_path)
 }
