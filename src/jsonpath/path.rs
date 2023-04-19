@@ -36,29 +36,45 @@ pub enum Path<'a> {
     DotWildcard,
     /// `[*]` represents selecting all elements in an Array.
     BracketWildcard,
+    /// `.<name>` represents selecting element that matched the name in an Object, like `$.event`.
+    /// The name can also be written as a string literal, allowing the name to contain special characters, like `$." $price"`.
+    DotField(Cow<'a, str>),
     /// `:<name>` represents selecting element that matched the name in an Object, like `$:event`.
     ColonField(Cow<'a, str>),
-    /// `.<name>` represents selecting element that matched the name in an Object, like `$.event`.
-    DotField(Cow<'a, str>),
-    /// `['<name>']` represents selecting element that matched the name in an Object, like `$['event']`.
+    /// `["<name>"]` represents selecting element that matched the name in an Object, like `$["event"]`.
     ObjectField(Cow<'a, str>),
-    /// `[<index1>,<index2>,..]` represents selecting elements specified by the indices in an Array, like `$[1,2]`.
+    /// `[<index1>,<index2>,..]` represents selecting elements specified by the indices in an Array.
+    /// There are several forms of index.
+    /// 1. A single number representing the 0-based `n-th` element in the Array.
+    ///    e.g. `$[0]` represents the first element in an Array.
+    /// 2. The keyword `last` represents the last element in the Array,
+    ///    and last minus a number represents the n-th element before the last element,
+    ///    e.g. `$[last-1]` represents the penultimate element.
+    /// 3. The keyword `to` between two numbers represent all elements of a range in an Array,
+    ///    e.g. `$[1 to last]` represents all the elements in the Array from the second to the last.
+    ///
+    /// There can be more than one index, e.g. `$[0, last-1 to last, 5]` represents the first,
+    /// the last two, and the sixth element in an Array.
     ArrayIndices(Vec<ArrayIndex>),
     /// `?(<expression>)` represents selecting all elements in an object or array that match the filter expression, like `$.book[?(@.price < 10)]`.
     FilterExpr(Box<Expr<'a>>),
 }
 
-/// Represents a literal value used in filter expression.
+/// Represents the single index in an Array.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Index {
+    /// The 0-based index in an Array.
     Index(i32),
+    /// The last n-th index in an Array.
     LastIndex(i32),
 }
 
-/// Represents a literal value used in filter expression.
+/// Represents the index in an Array.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArrayIndex {
+    /// The single number index.
     Index(Index),
+    /// The range index between two number.
     Slice((Index, Index)),
 }
 
@@ -84,7 +100,7 @@ pub enum BinaryOperator {
     Or,
     /// `==` represents left is equal to right.
     Eq,
-    /// `!=` represents left is not equal to right.
+    /// `!=` and `<>` represents left is not equal to right.
     NotEq,
     /// `<` represents left is less than right.
     Lt,

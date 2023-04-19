@@ -30,21 +30,21 @@ fn test_json_path() {
         r#"$.store.book[last].isbn"#,
         r#"$.store.book[0,1, last - 2].price"#,
         r#"$.store.book[0,1 to last-1]"#,
-        r#"$.store.book?(@.isbn).price"#,
         r#"$.store.book?(@.price > 10).title"#,
         r#"$.store.book?(@.price < $.expensive).price"#,
-        r#"$."store":book["price"]"#,
+        r#"$."store"."book""#,
         r#"$.store.book?(@.price < 10 && @.category == "fiction")"#,
         r#"$.store.book?(@.price > 10 || @.category == "reference")"#,
         r#"$.store.book?(@.price > 20 && (@.category == "reference" || @.category == "fiction"))"#,
+        // compatible with Snowflake style path
+        r#"[1][2]"#,
+        r#"["k1"]["k2"]"#,
+        r#"k1.k2:k3"#,
+        r#"k1["k2"][1]"#,
     ];
 
     for case in cases {
-        println!("\n---case={:?}", case);
-        //let json_path = parse_json_path(case.as_bytes()).unwrap();
-        let json_path = parse_json_path(case.as_bytes());
-        println!("json_path={:?}", json_path);
-        let json_path = json_path.unwrap();
+        let json_path = parse_json_path(case.as_bytes()).unwrap();
 
         writeln!(file, "---------- Input ----------").unwrap();
         writeln!(file, "{}", case).unwrap();

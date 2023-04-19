@@ -194,37 +194,6 @@ JsonPath {
 
 
 ---------- Input ----------
-$.store.book?(@.isbn).price
----------- Output ---------
-$.store.book?(@.isbn).price
----------- AST ------------
-JsonPath {
-    paths: [
-        Root,
-        DotField(
-            "store",
-        ),
-        DotField(
-            "book",
-        ),
-        FilterExpr(
-            Paths(
-                [
-                    Current,
-                    DotField(
-                        "isbn",
-                    ),
-                ],
-            ),
-        ),
-        DotField(
-            "price",
-        ),
-    ],
-}
-
-
----------- Input ----------
 $.store.book?(@.price > 10).title
 ---------- Output ---------
 $.store.book?(@.price > 10).title
@@ -308,9 +277,9 @@ JsonPath {
 
 
 ---------- Input ----------
-$."store":book["price"]
+$."store"."book"
 ---------- Output ---------
-$.store:book["price"]
+$.store.book
 ---------- AST ------------
 JsonPath {
     paths: [
@@ -318,11 +287,8 @@ JsonPath {
         DotField(
             "store",
         ),
-        ColonField(
+        DotField(
             "book",
-        ),
-        ObjectField(
-            "price",
         ),
     ],
 }
@@ -513,6 +479,98 @@ JsonPath {
                     },
                 },
             },
+        ),
+    ],
+}
+
+
+---------- Input ----------
+[1][2]
+---------- Output ---------
+[1][2]
+---------- AST ------------
+JsonPath {
+    paths: [
+        ArrayIndices(
+            [
+                Index(
+                    Index(
+                        1,
+                    ),
+                ),
+            ],
+        ),
+        ArrayIndices(
+            [
+                Index(
+                    Index(
+                        2,
+                    ),
+                ),
+            ],
+        ),
+    ],
+}
+
+
+---------- Input ----------
+["k1"]["k2"]
+---------- Output ---------
+["k1"]["k2"]
+---------- AST ------------
+JsonPath {
+    paths: [
+        ObjectField(
+            "k1",
+        ),
+        ObjectField(
+            "k2",
+        ),
+    ],
+}
+
+
+---------- Input ----------
+k1.k2:k3
+---------- Output ---------
+.k1.k2:k3
+---------- AST ------------
+JsonPath {
+    paths: [
+        DotField(
+            "k1",
+        ),
+        DotField(
+            "k2",
+        ),
+        ColonField(
+            "k3",
+        ),
+    ],
+}
+
+
+---------- Input ----------
+k1["k2"][1]
+---------- Output ---------
+.k1["k2"][1]
+---------- AST ------------
+JsonPath {
+    paths: [
+        DotField(
+            "k1",
+        ),
+        ObjectField(
+            "k2",
+        ),
+        ArrayIndices(
+            [
+                Index(
+                    Index(
+                        1,
+                    ),
+                ),
+            ],
         ),
     ],
 }

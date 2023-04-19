@@ -53,6 +53,7 @@ fn raw_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
 }
 
 fn string(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    // TODO: support special characters and unicode characters.
     delimited(char('"'), raw_string, char('"'))(input)
 }
 
@@ -253,7 +254,6 @@ fn expr_atom(input: &[u8]) -> IResult<&[u8], Expr<'_>> {
                 right: Box::new(right),
             },
         ),
-        map(inner_expr, |expr| expr),
         map(
             delimited(
                 terminated(char('('), multispace0),
