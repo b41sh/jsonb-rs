@@ -33,4 +33,5 @@ pub use from::*;
 pub use functions::*;
 pub use number::Number;
 pub use parser::parse_value;
+pub use parser::new_parse_value;
 pub use value::*;
