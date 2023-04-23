@@ -292,6 +292,8 @@ fn string(input: &[u8]) -> IResult<&[u8], Value<'_>> {
                 nom::error::ErrorKind::SeparatedList,
             )));
         }
+        let s = unsafe { std::str::from_utf8_unchecked(&input[start..end + offset]) };
+        let rest = &input[end + offset + 1..];
         return Ok((rest, Value::String(Cow::Borrowed(s))));
     }
 
