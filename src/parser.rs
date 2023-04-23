@@ -72,10 +72,11 @@ fn jsonb_value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
 }
 
 fn value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    /**
     alt((
-        map(tag("null"), |_| Value::Null),
-        map(tag("true"), |_| Value::Bool(true)),
-        map(tag("false"), |_| Value::Bool(false)),
+        map(parse_null, |v| v),
+        map(parse_true, |v| v),
+        map(parse_false, |v| v),
         //map(u64, |v| Value::Number(Number::UInt64(v))),
         //map(i64, |v| Value::Number(Number::Int64(v))),
         //map(double, |v| Value::Number(Number::Float64(v))),
@@ -98,7 +99,58 @@ fn value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
             Value::Object(obj)
         }),
     ))(input)
+    */
+
+    match input[0] {
+        b'n' => parse_null(input),
+        b't' => parse_true(input),
+        b'f' => parse_false(input),
+        b'0'..=b'9' | b'-' => parse_number(input),
+        b'"' => string(input),
+        b'[' => parse_array(input),
+        b'{' => parse_object(input),
+        _ => {
+            //println!("--input[0]={:?}", input[0]);
+            parse_null(input)
+        },
+    }
 }
+
+fn parse_number(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    map(number, |v| Value::Number(v))(input)
+}
+
+fn parse_array(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    map(array_values, |v| Value::Array(v))(input)
+}
+
+fn parse_object(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    map(object_values, |kvs| {
+        let mut obj = Object::new();
+        for (k, v) in kvs {
+            if let Value::String(k) = k {
+                let k = String::from(k);
+                //let k = String::from_utf8(k.to_vec()).unwrap();
+                obj.insert(k, v);
+            }
+        }
+        Value::Object(obj)
+    })(input)
+}
+
+
+fn parse_null(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    map(tag("null"), |_| Value::Null)(input)
+}
+
+fn parse_true(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    map(tag("true"), |_| Value::Bool(true))(input)
+}
+
+fn parse_false(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    map(tag("false"), |_| Value::Bool(false))(input)
+}
+
 
 /**
 
