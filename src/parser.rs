@@ -251,7 +251,19 @@ fn exponent(input: &[u8]) -> IResult<&[u8], &[u8]> {
     )))(input)
 }
 
+#[derive(PartialEq)]
+enum NumberState {
+    Init,
+    IsNegative,
+    IsZero,
+    IsInteger,
+    IsFraction,
+    IsExponent,
+    IsExponentNumber,
+}
+
 fn number(input: &[u8]) -> IResult<&[u8], Number> {
+/**
     alt((
         map(float, |s| {
             let v = unsafe { std::str::from_utf8_unchecked(s) };
@@ -272,7 +284,103 @@ fn number(input: &[u8]) -> IResult<&[u8], Number> {
             }
         }),
     ))(input)
+*/
+
+    let mut i = 0;
+    let mut is_negative = false;
+
+    let mut state = NumberState::Init;
+    while i < input.len() {
+        match input[i] {
+            b'-' => {
+                if state == NumberState::Init {
+                    is_negative = true;
+                    state = NumberState::IsNegative;
+                } else if state == NumberState::IsExponent {
+                    state = NumberState::IsExponentNumber;
+                } else {
+                    todo!();
+                }
+            },
+            b'+' => {
+                if state == NumberState::IsExponent {
+                    state = NumberState::IsExponentNumber;
+                } else {
+                    todo!();
+                }
+            }
+            b'0' => {
+                if state == NumberState::Init || state == NumberState::IsNegative {
+                    state = NumberState::IsZero;
+                }
+            },
+            b'1'..=b'9' => {
+                if state == NumberState::Init || state == NumberState::IsNegative {
+                    state = NumberState::IsInteger;
+                } else if state == NumberState::IsZero {
+                    todo!();
+                }
+            },
+            b'.' => {
+                if state == NumberState::IsZero || state == NumberState::IsInteger {
+                    state = NumberState::IsFraction;
+                } else {
+                    todo!();
+                }
+            },
+            b'e' | b'E' => {
+                if state == NumberState::IsZero || state == NumberState::IsInteger || state == NumberState::IsFraction {
+                    state = NumberState::IsExponent;
+                } else {
+                    todo!();
+                }
+            }
+            _ => {
+                break;
+            }
+        }
+
+        i += 1;
+    }
+    let v = unsafe { std::str::from_utf8_unchecked(&input[..i]) };
+    let rest = &input[i..];
+    //println!("-----input={:?}", input);
+    //println!("-----rest={:?}", rest);
+    match state {
+        NumberState::IsFraction | NumberState::IsExponent | NumberState::IsExponentNumber => {
+            //println!("float v={:?}", v);
+            let n = Number::Float64(fast_float::parse(v).unwrap());
+            //println!("float n={:?}", n);
+            Ok((rest, n))
+        }
+        NumberState::IsNegative | NumberState::IsZero | NumberState::IsInteger => {
+            //println!("integer v={:?}", v);
+            if is_negative {
+                let n = match v.parse::<i64>() {
+                    Ok(n) => Number::Int64(n),
+                    Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+                };
+                //println!("integer n={:?}", n);
+                Ok((rest, n))
+            } else {
+                let n = match v.parse::<u64>() {
+                    Ok(n) => Number::UInt64(n),
+                    Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+                };
+                //println!("uinteger n={:?}", n);
+                Ok((rest, n))
+            }
+        }
+        _ => todo!(),
+    }
 }
+
+
+
+
+
+
+
 
 fn raw_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
     escaped(alphanumeric1, '\\', one_of("\"n\\"))(input)
