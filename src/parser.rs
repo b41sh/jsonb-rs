@@ -22,6 +22,305 @@ use super::util::parse_escaped_string;
 use super::value::Object;
 use super::value::Value;
 
+use nom::error::ParseError;
+
+use nom::{
+    branch::alt,
+    bytes::complete::{escaped, tag, take, take_while_m_n},
+    character::complete::{alphanumeric1, char, i64, multispace0, one_of, u64},
+    character::{is_alphabetic, is_hex_digit},
+    combinator::{map, map_opt, map_res, opt, recognize},
+    multi::{many0, many1, separated_list0},
+    number::complete::hex_u32,
+    sequence::{delimited, preceded, separated_pair, terminated, tuple},
+    IResult,
+};
+
+use aho_corasick::{AhoCorasick, MatchKind};
+use once_cell::sync::Lazy;
+
+static PATTERNS: &[&str] = &["\\", "\""];
+
+static TOKEN_START: Lazy<AhoCorasick> = Lazy::new(|| {
+    AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostFirst)
+        .build(PATTERNS)
+        .unwrap()
+});
+
+/// Parsing the input string to JSONB Value.
+pub fn new_parse_value(input: &[u8]) -> Result<Value<'_>, Error> {
+    match jsonb_value(input) {
+        Ok((rest, value)) => {
+            if !rest.is_empty() {
+                return Err(Error::InvalidJsonPath);
+            }
+            Ok(value)
+        }
+        Err(nom::Err::Error(_err) | nom::Err::Failure(_err)) => Err(Error::InvalidJsonb),
+        Err(nom::Err::Incomplete(_)) => unreachable!(),
+    }
+}
+
+fn jsonb_value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    map(delimited(multispace0, value, multispace0), |value| value)(input)
+}
+
+fn value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    alt((
+        map(tag("null"), |_| Value::Null),
+        map(tag("true"), |_| Value::Bool(true)),
+        map(tag("false"), |_| Value::Bool(false)),
+        //map(u64, |v| Value::Number(Number::UInt64(v))),
+        //map(i64, |v| Value::Number(Number::Int64(v))),
+        //map(double, |v| Value::Number(Number::Float64(v))),
+        map(number, |v| Value::Number(v)),
+        map(string, |v| {
+            //Value::String(Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(v) }))
+            //Value::String(v)
+            v
+        }),
+        map(array_values, Value::Array),
+        map(object_values, |kvs| {
+            let mut obj = Object::new();
+            for (k, v) in kvs {
+                let k = String::from_utf8(k.to_vec()).unwrap();
+                obj.insert(k, v);
+            }
+            Value::Object(obj)
+        }),
+    ))(input)
+}
+
+/**
+
+opt(char('-')) 0                    . many(digit) e/E opt(+/-)
+opt(char('-')) oen(1-9) many(digit) . many(digit)
+0
+1-9
+
+digit
+
+
+
+
+
+
+number
+    integer fraction exponent
+integer
+    digit
+    onenine digits
+    <code>'-'</code> digit
+    <code>'-'</code> onenine digits
+
+digits
+    digit
+    digit digits
+
+digit
+    <code>'0'</code>
+    onenine
+
+onenine
+    <code>'1'</code> <code>.</code> <code>'9'</code>
+
+fraction
+    <code>""</code>
+    <code>'.'</code> digits
+
+exponent
+    <code>""</code>
+    <code>'E'</code> sign digits
+    <code>'e'</code> sign digits
+
+sign
+    <code>""</code>
+    <code>'+'</code>
+    <code>'-'</code>
+
+
+CREATE TABLE cars
+(
+    car_make varchar,
+    car_model varchar[],
+    car_type varchar[]
+);
+
+SELECT car_make, array_FILTER(car_model, car_type, x,y -> y = 'sedan') as sedans
+FROM cars;
+
+
+token value:sym<number> {
+    '-'?
+    [ 0 | <[1..9]> <[0..9]>* ]
+    [ \. <[0..9]>+ ]?
+    [ <[eE]> [\+|\-]? <[0..9]>+ ]?
+}
+*/
+
+fn float(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    alt((
+        // Case one: .42
+        recognize(tuple((opt(char('-')), integer, fraction, exponent))),
+        recognize(tuple((opt(char('-')), integer, fraction))),
+        recognize(tuple((opt(char('-')), integer, exponent))),
+    ))(input)
+}
+
+fn integer(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    alt((
+        recognize(char('0')),
+        recognize(tuple((one_of("123456789"), many0(one_of("0123456789"))))),
+    ))(input)
+}
+
+fn neg_integer(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    recognize(tuple((char('-'), integer)))(input)
+}
+
+fn fraction(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    recognize(tuple((char('.'), many1(one_of("0123456789")))))(input)
+}
+
+fn exponent(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    recognize(tuple((
+        one_of("eE"),
+        opt(one_of("+-")),
+        many1(one_of("0123456789")),
+    )))(input)
+}
+
+fn number(input: &[u8]) -> IResult<&[u8], Number> {
+    alt((
+        map(float, |s| {
+            let v = unsafe { std::str::from_utf8_unchecked(s) };
+            Number::Float64(fast_float::parse(v).unwrap())
+        }),
+        map(integer, |s| {
+            let v = unsafe { std::str::from_utf8_unchecked(s) };
+            match v.parse::<u64>() {
+                Ok(n) => Number::UInt64(n),
+                Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+            }
+        }),
+        map(neg_integer, |s| {
+            let v = unsafe { std::str::from_utf8_unchecked(s) };
+            match v.parse::<i64>() {
+                Ok(n) => Number::Int64(n),
+                Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+            }
+        }),
+    ))(input)
+}
+
+fn raw_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    escaped(alphanumeric1, '\\', one_of("\"n\\"))(input)
+}
+
+fn stringg(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    // TODO: support special characters and unicode characters.
+    delimited(char('"'), raw_string, char('"'))(input)
+}
+
+//92, 117, 48, 48, 100, 49,
+//\   u    1   2   3    4
+//92, 117, 48, 48, 56, 55,
+
+fn escaped_char(input: &[u8]) -> IResult<&[u8], char> {
+    alt((
+        map(preceded(char('u'), hex_u32), |hex| {
+            char::from_u32(hex).unwrap()
+        }),
+        map(char('"'), |_| QU),
+        map(char('\\'), |_| BS),
+        map(char('/'), |_| SD),
+        map(char('b'), |_| BB),
+        map(char('f'), |_| FF),
+        map(char('n'), |_| NN),
+        map(char('r'), |_| RR),
+        map(char('t'), |_| TT),
+    ))(input)
+}
+
+//fn string(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+//fn string<'a>(input: &'a [u8]) -> IResult<&'a [u8], Cow<'a>> {
+//fn string(input: &[u8]) -> IResult<&[u8], Cow<'_>> {
+fn string(input: &[u8]) -> IResult<&[u8], Value<'_>> {
+    if input.is_empty() || input[0] != b'"' {
+        return Err(nom::Err::Error(nom::error::Error::from_error_kind(
+            input,
+            nom::error::ErrorKind::SeparatedList,
+        )));
+    }
+    let start = 1;
+    let mut offset = 1;
+
+    if let Some(mat) = TOKEN_START.find(&input[offset..]) {
+        let end = mat.start();
+        if mat.pattern() == 0.into() {
+            let mut str_buf =
+                unsafe { String::from_utf8_unchecked(input[start..end + offset].to_vec()) };
+            let (mut rest, c) = escaped_char(&input[end + 2..]).unwrap();
+            str_buf.push(c);
+            while let Some(mat) = TOKEN_START.find(rest) {
+                let end = mat.start();
+                let s = unsafe { std::str::from_utf8_unchecked(&rest[..end]) };
+                str_buf.extend(s.chars());
+                if mat.pattern() == 0.into() {
+                    let (restt, c) = escaped_char(&rest[end + 1..]).unwrap();
+                    str_buf.push(c);
+                    rest = restt;
+                    continue;
+                }
+                let rest = &rest[end + 1..];
+                return Ok((rest, Value::String(Cow::Owned(str_buf))));
+            }
+
+            return Err(nom::Err::Error(nom::error::Error::from_error_kind(
+                input,
+                nom::error::ErrorKind::SeparatedList,
+            )));
+        }
+        let s = unsafe { std::str::from_utf8_unchecked(&input[start..end + offset]) };
+        let rest = &input[end + offset + 1..];
+
+        return Ok((rest, Value::String(Cow::Borrowed(s))));
+    }
+
+    return Err(nom::Err::Error(nom::error::Error::from_error_kind(
+        input,
+        nom::error::ErrorKind::SeparatedList,
+    )));
+}
+
+fn array_values(input: &[u8]) -> IResult<&[u8], Vec<Value<'_>>> {
+    delimited(
+        terminated(char('['), multispace0),
+        separated_list0(delimited(multispace0, char(','), multispace0), value),
+        preceded(multispace0, char(']')),
+    )(input)
+}
+
+fn key_value(input: &[u8]) -> IResult<&[u8], (&[u8], Value<'_>)> {
+    map(
+        separated_pair(
+            stringg,
+            delimited(multispace0, char(':'), multispace0),
+            value,
+        ),
+        |(k, v)| (k, v),
+    )(input)
+}
+
+fn object_values(input: &[u8]) -> IResult<&[u8], Vec<(&[u8], Value<'_>)>> {
+    delimited(
+        terminated(char('{'), multispace0),
+        separated_list0(delimited(multispace0, char(','), multispace0), key_value),
+        preceded(multispace0, char('}')),
+    )(input)
+}
+
 // Parse JSON text to JSONB Value.
 // Inspired by `https://github.com/jorgecarleitao/json-deserializer`
 // Thanks Jorge Leitao.
