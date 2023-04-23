@@ -57,7 +57,12 @@ pub fn new_parse_value(input: &[u8]) -> Result<Value<'_>, Error> {
             }
             Ok(value)
         }
-        Err(nom::Err::Error(_err) | nom::Err::Failure(_err)) => Err(Error::InvalidJsonb),
+        Err(nom::Err::Error(err) | nom::Err::Failure(err)) => {
+            println!("------err={:?}", err.code);
+            let ss = String::from_utf8(err.input.to_vec());
+            println!("--rest={:?}", ss);
+            Err(Error::InvalidJsonb)
+        }
         Err(nom::Err::Incomplete(_)) => unreachable!(),
     }
 }
@@ -84,8 +89,11 @@ fn value(input: &[u8]) -> IResult<&[u8], Value<'_>> {
         map(object_values, |kvs| {
             let mut obj = Object::new();
             for (k, v) in kvs {
-                let k = String::from_utf8(k.to_vec()).unwrap();
-                obj.insert(k, v);
+                if let Value::String(k) = k {
+                    let k = String::from(k);
+                    //let k = String::from_utf8(k.to_vec()).unwrap();
+                    obj.insert(k, v);
+                }
             }
             Value::Object(obj)
         }),
@@ -253,6 +261,9 @@ fn string(input: &[u8]) -> IResult<&[u8], Value<'_>> {
             nom::error::ErrorKind::SeparatedList,
         )));
     }
+    //let ss = String::from_utf8(input.to_vec());
+    //println!("input={:?}", ss);
+
     let start = 1;
     let mut offset = 1;
 
@@ -276,15 +287,11 @@ fn string(input: &[u8]) -> IResult<&[u8], Value<'_>> {
                 let rest = &rest[end + 1..];
                 return Ok((rest, Value::String(Cow::Owned(str_buf))));
             }
-
             return Err(nom::Err::Error(nom::error::Error::from_error_kind(
                 input,
                 nom::error::ErrorKind::SeparatedList,
             )));
         }
-        let s = unsafe { std::str::from_utf8_unchecked(&input[start..end + offset]) };
-        let rest = &input[end + offset + 1..];
-
         return Ok((rest, Value::String(Cow::Borrowed(s))));
     }
 
@@ -302,10 +309,10 @@ fn array_values(input: &[u8]) -> IResult<&[u8], Vec<Value<'_>>> {
     )(input)
 }
 
-fn key_value(input: &[u8]) -> IResult<&[u8], (&[u8], Value<'_>)> {
+fn key_value(input: &[u8]) -> IResult<&[u8], (Value<'_>, Value<'_>)> {
     map(
         separated_pair(
-            stringg,
+            string,
             delimited(multispace0, char(':'), multispace0),
             value,
         ),
@@ -313,7 +320,7 @@ fn key_value(input: &[u8]) -> IResult<&[u8], (&[u8], Value<'_>)> {
     )(input)
 }
 
-fn object_values(input: &[u8]) -> IResult<&[u8], Vec<(&[u8], Value<'_>)>> {
+fn object_values(input: &[u8]) -> IResult<&[u8], Vec<(Value<'_>, Value<'_>)>> {
     delimited(
         terminated(char('{'), multispace0),
         separated_list0(delimited(multispace0, char(','), multispace0), key_value),
