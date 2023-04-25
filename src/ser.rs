@@ -145,6 +145,7 @@ impl<'a> Encoder<'a> {
                 self.buf.extend_from_slice(s.as_ref().as_bytes());
                 JEntry::make_string_jentry(len)
             }
+            Value::MString(_) => todo!(),
             Value::Array(array) => {
                 let len = self.encode_array(array);
                 JEntry::make_container_jentry(len)

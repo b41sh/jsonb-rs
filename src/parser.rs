@@ -49,25 +49,6 @@ static TOKEN_START: Lazy<AhoCorasick> = Lazy::new(|| {
 });
 
 
-static PATTERNS2: &[&str] = &[".", "e", "E", " ", ",", "]", "}"];
-
-static NUMBER_END: Lazy<AhoCorasick> = Lazy::new(|| {
-    AhoCorasick::builder()
-        .match_kind(MatchKind::LeftmostFirst)
-        .build(PATTERNS2)
-        .unwrap()
-});
-
-static PATTERNS3: &[&str] = &[" ", ",", "]", "}"];
-
-static NUMBER_END3: Lazy<AhoCorasick> = Lazy::new(|| {
-    AhoCorasick::builder()
-        .match_kind(MatchKind::LeftmostFirst)
-        .build(PATTERNS3)
-        .unwrap()
-});
-
-
 /// Parsing the input string to JSONB Value.
 pub fn new_parse_value(input: &[u8]) -> Result<Value<'_>, Error> {
     match jsonb_value(input) {
@@ -399,56 +380,49 @@ fn number(input: &[u8]) -> IResult<&[u8], Number> {
 
 
 
-
-    let is_negative = if input[0] == b'-' {
+    let mut idx = 0;
+    let is_negative = if input[idx] == b'-' {
+        idx += 1;
         true
     } else {
         false
     };
-
-    if let Some(mat) = NUMBER_END.find(&input[1..]) {
-        let end = mat.end();
-        if mat.pattern() == 0.into() || mat.pattern() == 1.into() || mat.pattern() == 2.into() {
-            if let Some(mat) = NUMBER_END3.find(&input[end+1..]) {
-                let end2 = mat.end();
-
-                let v = unsafe { std::str::from_utf8_unchecked(&input[..end + end2]) };
-                let rest = &input[end + end2..];
-                //println!("-----float v={:?}", v);
-                //println!("-----float rest={:?}", rest);
-                //println!("float v={:?}", v);
-                let n = Number::Float64(fast_float::parse(v).unwrap());
-                //println!("float n={:?}", n);
-                return Ok((rest, n));
-            }
-        } else {
-            let v = unsafe { std::str::from_utf8_unchecked(&input[..end]) };
-            let rest = &input[end..];
-            //println!("-----number v={:?}", v);
-            //println!("-----number rest={:?}", rest);
-            //println!("float v={:?}", v);
-            if is_negative {
-                let n = match v.parse::<i64>() {
-                    Ok(n) => Number::Int64(n),
-                    Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
-                };
-                //println!("integer n={:?}", n);
-                return Ok((rest, n));
+    if input[idx] == b'0' {
+        idx += 1;
+    } else {
+        while idx < input.len() {
+            if input[idx] >= b'0' && input[idx] <= b'9' {
+                idx += 1;
             } else {
-                let n = match v.parse::<u64>() {
-                    Ok(n) => Number::UInt64(n),
-                    Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
-                };
-                //println!("uinteger n={:?}", n);
-                return Ok((rest, n));
+                break;
             }
         }
     }
-
-    return Err(nom::Err::Error(nom::error::Error::from_error_kind(
-        input,
-        nom::error::ErrorKind::SeparatedList,
-    )));
+    if input[idx] == b'.' || input[idx] == b'e' || input[idx] == b'E' {
+        let (n, len) = fast_float::parse_partial::<f64, _>(input).unwrap();
+        let rest = &input[len..];
+        //println!("n={:?}", n);
+        //println!("rest={:?}", rest);
+        Ok((rest, Number::Float64(n)))
+    } else {
+        let v = unsafe { std::str::from_utf8_unchecked(&input[..idx]) };
+        let rest = &input[idx..];
+        if is_negative {
+            let n = match v.parse::<i64>() {
+                Ok(n) => Number::Int64(n),
+                Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+            };
+            //println!("integer n={:?}", n);
+            return Ok((rest, n));
+        } else {
+            let n = match v.parse::<u64>() {
+                Ok(n) => Number::UInt64(n),
+                Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+            };
+            //println!("uinteger n={:?}", n);
+            return Ok((rest, n));
+        }
+    }
 }
 
 
@@ -504,22 +478,28 @@ fn string(input: &[u8]) -> IResult<&[u8], Value<'_>> {
     if let Some(mat) = TOKEN_START.find(&input[offset..]) {
         let end = mat.start();
         if mat.pattern() == 0.into() {
-            let mut str_buf =
-                unsafe { String::from_utf8_unchecked(input[start..end + offset].to_vec()) };
+            let mut strs = Vec::new();
+            let s = unsafe { std::str::from_utf8_unchecked(&input[start..end + offset]) };
+            strs.push(Cow::Borrowed(s));
             let (mut rest, c) = escaped_char(&input[end + 2..]).unwrap();
-            str_buf.push(c);
+            strs.push(Cow::Owned(c.to_string()));
             while let Some(mat) = TOKEN_START.find(rest) {
                 let end = mat.start();
-                let s = unsafe { std::str::from_utf8_unchecked(&rest[..end]) };
-                str_buf.extend(s.chars());
+                if end > 0 {
+                    let s = unsafe { std::str::from_utf8_unchecked(&rest[..end]) };
+                    strs.push(Cow::Borrowed(s));
+                }
+                //str_buf.extend(s.chars());
                 if mat.pattern() == 0.into() {
                     let (restt, c) = escaped_char(&rest[end + 1..]).unwrap();
-                    str_buf.push(c);
+                    //str_buf.push(c);
+                    strs.push(Cow::Owned(c.to_string()));
                     rest = restt;
                     continue;
                 }
                 let rest = &rest[end + 1..];
-                return Ok((rest, Value::String(Cow::Owned(str_buf))));
+                //return Ok((rest, Value::String(Cow::Owned(str_buf))));
+                return Ok((rest, Value::MString(strs)))
             }
             return Err(nom::Err::Error(nom::error::Error::from_error_kind(
                 input,

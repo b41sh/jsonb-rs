@@ -30,6 +30,7 @@ pub enum Value<'a> {
     Null,
     Bool(bool),
     String(Cow<'a, str>),
+    MString(Vec<Cow<'a, str>>),
     Number(Number),
     Array(Vec<Value<'a>>),
     Object(Object<'a>),
@@ -42,6 +43,11 @@ impl<'a> Debug for Value<'a> {
             Value::Bool(v) => formatter.debug_tuple("Bool").field(&v).finish(),
             Value::Number(ref v) => Debug::fmt(v, formatter),
             Value::String(ref v) => formatter.debug_tuple("String").field(v).finish(),
+            Value::MString(ref v) => {
+                formatter.write_str("String(")?;
+                Debug::fmt(v, formatter)?;
+                formatter.write_str(")")
+            }
             Value::Array(ref v) => {
                 formatter.write_str("Array(")?;
                 Debug::fmt(v, formatter)?;
@@ -71,6 +77,13 @@ impl<'a> Display for Value<'a> {
             Value::String(ref v) => {
                 write!(f, "\"")?;
                 write!(f, "{v}")?;
+                write!(f, "\"")
+            }
+            Value::MString(ref vs) => {
+                write!(f, "\"")?;
+                for v in vs {
+                    write!(f, "{v}")?;
+                }
                 write!(f, "\"")
             }
             Value::Array(ref vs) => {
