@@ -48,6 +48,26 @@ static TOKEN_START: Lazy<AhoCorasick> = Lazy::new(|| {
         .unwrap()
 });
 
+
+static PATTERNS2: &[&str] = &[".", "e", "E", " ", ",", "]", "}"];
+
+static NUMBER_END: Lazy<AhoCorasick> = Lazy::new(|| {
+    AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostFirst)
+        .build(PATTERNS2)
+        .unwrap()
+});
+
+static PATTERNS3: &[&str] = &[" ", ",", "]", "}"];
+
+static NUMBER_END3: Lazy<AhoCorasick> = Lazy::new(|| {
+    AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostFirst)
+        .build(PATTERNS3)
+        .unwrap()
+});
+
+
 /// Parsing the input string to JSONB Value.
 pub fn new_parse_value(input: &[u8]) -> Result<Value<'_>, Error> {
     match jsonb_value(input) {
@@ -286,6 +306,7 @@ fn number(input: &[u8]) -> IResult<&[u8], Number> {
     ))(input)
 */
 
+/**
     let mut i = 0;
     let mut is_negative = false;
 
@@ -373,9 +394,62 @@ fn number(input: &[u8]) -> IResult<&[u8], Number> {
         }
         _ => todo!(),
     }
+
+*/
+
+
+
+
+    let is_negative = if input[0] == b'-' {
+        true
+    } else {
+        false
+    };
+
+    if let Some(mat) = NUMBER_END.find(&input[1..]) {
+        let end = mat.end();
+        if mat.pattern() == 0.into() || mat.pattern() == 1.into() || mat.pattern() == 2.into() {
+            if let Some(mat) = NUMBER_END3.find(&input[end+1..]) {
+                let end2 = mat.end();
+
+                let v = unsafe { std::str::from_utf8_unchecked(&input[..end + end2]) };
+                let rest = &input[end + end2..];
+                //println!("-----float v={:?}", v);
+                //println!("-----float rest={:?}", rest);
+                //println!("float v={:?}", v);
+                let n = Number::Float64(fast_float::parse(v).unwrap());
+                //println!("float n={:?}", n);
+                return Ok((rest, n));
+            }
+        } else {
+            let v = unsafe { std::str::from_utf8_unchecked(&input[..end]) };
+            let rest = &input[end..];
+            //println!("-----number v={:?}", v);
+            //println!("-----number rest={:?}", rest);
+            //println!("float v={:?}", v);
+            if is_negative {
+                let n = match v.parse::<i64>() {
+                    Ok(n) => Number::Int64(n),
+                    Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+                };
+                //println!("integer n={:?}", n);
+                return Ok((rest, n));
+            } else {
+                let n = match v.parse::<u64>() {
+                    Ok(n) => Number::UInt64(n),
+                    Err(_) => Number::Float64(fast_float::parse(v).unwrap()),
+                };
+                //println!("uinteger n={:?}", n);
+                return Ok((rest, n));
+            }
+        }
+    }
+
+    return Err(nom::Err::Error(nom::error::Error::from_error_kind(
+        input,
+        nom::error::ErrorKind::SeparatedList,
+    )));
 }
-
-
 
 
 
