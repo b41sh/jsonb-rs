@@ -952,6 +952,56 @@ fn escape_scalar_string(value: &[u8], start: usize, end: usize, json: &mut Strin
     json.push('\"');
 }
 
+
+pub fn convert_row(value: &[u8], buf: &mut Vec<u8>) {
+    if !is_jsonb(value) {
+        buf.push(0);
+        buf.extend_from_slice(value);
+        return;
+    }
+    let header = read_u32(value, 0).unwrap();
+    match header & CONTAINER_HEADER_TYPE_MASK {
+        SCALAR_CONTAINER_TAG => {
+            let encoded = read_u32(value, 4).unwrap();
+            let jentry = JEntry::decode_jentry(encoded);
+            convert_scalar_row(&jentry, &value[8..], buf);
+        }
+        _ => todo!(),
+    }
+}
+
+// null > arr > obj > str > num > false > true
+//  7     6     5     4     3      2      1
+fn convert_scalar_row(jentry: &JEntry, value: &[u8], buf: &mut Vec<u8>) {
+    match jentry.type_code {
+        NULL_TAG => {
+            buf.push(7);
+        }
+        STRING_TAG => {
+            buf.push(4);
+            let offset = jentry.length as usize;
+            buf.extend_from_slice(&value[..offset]);
+        }
+        NUMBER_TAG => {
+            buf.push(3);
+            let offset = jentry.length as usize;
+            let num = Number::decode(&value[..offset]);
+            let v = num.as_f64().unwrap();
+            // https://github.com/rust-lang/rust/blob/9c20b2a8cc7588decb6de25ac6a7912dcef24d65/library/core/src/num/f32.rs#L1176-L1260
+            let s = v.to_bits() as i64;
+            let val = s ^ (((s >> 63) as u64) >> 1) as i64;
+            buf.extend_from_slice(&val.to_be_bytes());
+        }
+        TRUE_TAG => {
+            buf.push(1);
+        }
+        FALSE_TAG => {
+            buf.push(2);
+        }
+        _ => unreachable!(),
+    }
+}
+
 // Check whether the value is `JSONB` format,
 // for compatibility with previous `JSON` string.
 fn is_jsonb(value: &[u8]) -> bool {
