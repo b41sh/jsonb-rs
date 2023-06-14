@@ -955,7 +955,7 @@ fn escape_scalar_string(value: &[u8], start: usize, end: usize, json: &mut Strin
 
 pub fn convert_row(value: &[u8], buf: &mut Vec<u8>) {
     if !is_jsonb(value) {
-        buf.push(0);
+        buf.push(97);
         buf.extend_from_slice(value);
         return;
     }
@@ -972,18 +972,19 @@ pub fn convert_row(value: &[u8], buf: &mut Vec<u8>) {
 
 // null > arr > obj > str > num > false > true
 //  7     6     5     4     3      2      1
+//  104   103   102   101   100    99     98
 fn convert_scalar_row(jentry: &JEntry, value: &[u8], buf: &mut Vec<u8>) {
     match jentry.type_code {
         NULL_TAG => {
-            buf.push(7);
+            buf.push(104);
         }
         STRING_TAG => {
-            buf.push(4);
+            buf.push(101);
             let offset = jentry.length as usize;
             buf.extend_from_slice(&value[..offset]);
         }
         NUMBER_TAG => {
-            buf.push(3);
+            buf.push(100);
             let offset = jentry.length as usize;
             let num = Number::decode(&value[..offset]);
             let v = num.as_f64().unwrap();
@@ -992,11 +993,11 @@ fn convert_scalar_row(jentry: &JEntry, value: &[u8], buf: &mut Vec<u8>) {
             let val = s ^ (((s >> 63) as u64) >> 1) as i64;
             buf.extend_from_slice(&val.to_be_bytes());
         }
-        TRUE_TAG => {
-            buf.push(1);
-        }
         FALSE_TAG => {
-            buf.push(2);
+            buf.push(99);
+        }
+        TRUE_TAG => {
+            buf.push(98);
         }
         _ => unreachable!(),
     }
