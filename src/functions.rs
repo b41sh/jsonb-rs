@@ -970,7 +970,7 @@ pub fn convert_row(value: &[u8], buf: &mut Vec<u8>) {
     }
 }
 
-// null > arr > obj > str > num > false > true
+// null > arr > obj > str > num > true > false
 //  7     6     5     4     3      2      1
 //  104   103   102   101   100    99     98
 fn convert_scalar_row(jentry: &JEntry, value: &[u8], buf: &mut Vec<u8>) {
@@ -993,10 +993,10 @@ fn convert_scalar_row(jentry: &JEntry, value: &[u8], buf: &mut Vec<u8>) {
             let val = s ^ (((s >> 63) as u64) >> 1) as i64;
             buf.extend_from_slice(&val.to_be_bytes());
         }
-        FALSE_TAG => {
+        TRUE_TAG => {
             buf.push(99);
         }
-        TRUE_TAG => {
+        FALSE_TAG => {
             buf.push(98);
         }
         _ => unreachable!(),
