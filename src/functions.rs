@@ -1120,7 +1120,7 @@ pub fn rand_value() -> Value<'static> {
             let len = rng.gen_range(0..=5);
             let mut values = Vec::with_capacity(len);
             for _ in 0..len {
-                values.push(rand_value());
+                values.push(rand_scalar_value());
             }
             Value::Array(values)
         }
@@ -1129,34 +1129,40 @@ pub fn rand_value() -> Value<'static> {
             let mut obj = Object::new();
             for _ in 0..len {
                 let k = Alphanumeric.sample_string(&mut rng, 5);
-                let v = rand_value();
+                let v = rand_scalar_value();
                 obj.insert(k, v);
             }
             Value::Object(obj)
         }
-        _ => match rng.gen_range(0..=4) {
-            0 => Value::Bool(true),
-            1 => Value::Bool(false),
-            2 => {
-                let s = Alphanumeric.sample_string(&mut rng, 5);
-                Value::String(Cow::from(s))
+        _ => rand_scalar_value(),
+    };
+    val
+}
+
+fn rand_scalar_value() -> Value<'static> {
+    let mut rng = thread_rng();
+    let val = match rng.gen_range(0..=4) {
+        0 => Value::Bool(true),
+        1 => Value::Bool(false),
+        2 => {
+            let s = Alphanumeric.sample_string(&mut rng, 5);
+            Value::String(Cow::from(s))
+        }
+        3 => match rng.gen_range(0..=2) {
+            0 => {
+                let num = rng.gen_range(u64::MIN..=u64::MAX);
+                Value::Number(Number::UInt64(num))
             }
-            3 => match rng.gen_range(0..=2) {
-                0 => {
-                    let num = rng.gen_range(u64::MIN..=u64::MAX);
-                    Value::Number(Number::UInt64(num))
-                }
-                1 => {
-                    let num = rng.gen_range(i64::MIN..=i64::MAX);
-                    Value::Number(Number::Int64(num))
-                }
-                _ => {
-                    let num = rng.gen_range(f64::MIN..=f64::MAX);
-                    Value::Number(Number::Float64(num))
-                }
-            },
-            _ => Value::Null,
+            1 => {
+                let num = rng.gen_range(i64::MIN..=i64::MAX);
+                Value::Number(Number::Int64(num))
+            }
+            _ => {
+                let num = rng.gen_range(f64::MIN..=f64::MAX);
+                Value::Number(Number::Float64(num))
+            }
         },
+        _ => Value::Null,
     };
     val
 }
