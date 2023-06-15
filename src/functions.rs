@@ -17,17 +17,22 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 
-use super::constants::*;
-use super::error::*;
-use super::jentry::JEntry;
-use super::number::Number;
-use super::parser::parse_value;
-use super::value::Value;
+use crate::constants::*;
+use crate::error::*;
+use crate::jentry::JEntry;
 use crate::jsonpath::ArrayIndex;
 use crate::jsonpath::Index;
 use crate::jsonpath::JsonPath;
 use crate::jsonpath::Path;
 use crate::jsonpath::Selector;
+use crate::number::Number;
+use crate::parser::parse_value;
+use crate::value::Object;
+use crate::value::Value;
+use rand::distributions::Alphanumeric;
+use rand::distributions::DistString;
+use rand::thread_rng;
+use rand::Rng;
 
 // builtin functions for `JSONB` bytes and `JSON` strings without decode all Values.
 // The input value must be valid `JSONB' or `JSON`.
@@ -1105,6 +1110,55 @@ fn object_convert_to_comparable(depth: u8, length: usize, value: &[u8], buf: &mu
         key_offset += key_jentry.length as usize;
         val_offset += val_jentry.length as usize;
     }
+}
+
+/// generate random JSONB value
+pub fn rand_value() -> Value<'static> {
+    let mut rng = thread_rng();
+    let val = match rng.gen_range(0..=2) {
+        0 => {
+            let len = rng.gen_range(0..=5);
+            let mut values = Vec::with_capacity(len);
+            for _ in 0..len {
+                values.push(rand_value());
+            }
+            Value::Array(values)
+        }
+        1 => {
+            let len = rng.gen_range(0..=5);
+            let mut obj = Object::new();
+            for _ in 0..len {
+                let k = Alphanumeric.sample_string(&mut rng, 5);
+                let v = rand_value();
+                obj.insert(k, v);
+            }
+            Value::Object(obj)
+        }
+        _ => match rng.gen_range(0..=4) {
+            0 => Value::Bool(true),
+            1 => Value::Bool(false),
+            2 => {
+                let s = Alphanumeric.sample_string(&mut rng, 5);
+                Value::String(Cow::from(s))
+            }
+            3 => match rng.gen_range(0..=2) {
+                0 => {
+                    let num = rng.gen_range(u64::MIN..=u64::MAX);
+                    Value::Number(Number::UInt64(num))
+                }
+                1 => {
+                    let num = rng.gen_range(i64::MIN..=i64::MAX);
+                    Value::Number(Number::Int64(num))
+                }
+                _ => {
+                    let num = rng.gen_range(f64::MIN..=f64::MAX);
+                    Value::Number(Number::Float64(num))
+                }
+            },
+            _ => Value::Null,
+        },
+    };
+    val
 }
 
 // Check whether the value is `JSONB` format,
