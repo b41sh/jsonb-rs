@@ -1141,25 +1141,27 @@ pub fn rand_value() -> Value<'static> {
 
 fn rand_scalar_value() -> Value<'static> {
     let mut rng = thread_rng();
-    let val = match rng.gen_range(0..=4) {
-        0 => Value::Bool(true),
-        1 => Value::Bool(false),
-        2 => {
+    let val = match rng.gen_range(0..=3) {
+        0 => {
+            let v = rng.gen_bool(0.5);
+            Value::Bool(v)
+        }
+        1 => {
             let s = Alphanumeric.sample_string(&mut rng, 5);
             Value::String(Cow::from(s))
         }
-        3 => match rng.gen_range(0..=2) {
+        2 => match rng.gen_range(0..=2) {
             0 => {
-                let num = rng.gen_range(u64::MIN..=u64::MAX);
-                Value::Number(Number::UInt64(num))
+                let n: u64 = rng.gen_range(0..=100000);
+                Value::Number(Number::UInt64(n))
             }
             1 => {
-                let num = rng.gen_range(i64::MIN..=i64::MAX);
-                Value::Number(Number::Int64(num))
+                let n: i64 = rng.gen_range(-100000..=100000);
+                Value::Number(Number::Int64(n))
             }
             _ => {
-                let num = rng.gen_range(f64::MIN..=f64::MAX);
-                Value::Number(Number::Float64(num))
+                let n: f64 = rng.gen_range(-4000.0..1.3e5);
+                Value::Number(Number::Float64(n))
             }
         },
         _ => Value::Null,
