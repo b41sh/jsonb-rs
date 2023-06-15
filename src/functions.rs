@@ -365,15 +365,15 @@ pub fn compare(left: &[u8], right: &[u8]) -> Result<Ordering, Error> {
 }
 
 // Different types of values have different levels and are definitely not equal
-fn jentry_compare_level(jentry: &JEntry) -> Result<u8, Error> {
+fn jentry_compare_level(jentry: &JEntry) -> u8 {
     match jentry.type_code {
-        NULL_TAG => Ok(5),
-        CONTAINER_TAG => Ok(4),
-        STRING_TAG => Ok(3),
-        NUMBER_TAG => Ok(2),
-        TRUE_TAG => Ok(1),
-        FALSE_TAG => Ok(0),
-        _ => Err(Error::InvalidJsonbJEntry),
+        NULL_TAG => 7,
+        CONTAINER_TAG => 5,
+        STRING_TAG => 4,
+        NUMBER_TAG => 3,
+        TRUE_TAG => 2,
+        FALSE_TAG => 1,
+        _ => 0,
     }
 }
 
@@ -385,8 +385,8 @@ fn compare_scalar(
     right_jentry: &JEntry,
     right: &[u8],
 ) -> Result<Ordering, Error> {
-    let left_level = jentry_compare_level(left_jentry)?;
-    let right_level = jentry_compare_level(right_jentry)?;
+    let left_level = jentry_compare_level(left_jentry);
+    let right_level = jentry_compare_level(right_jentry);
     if left_level != right_level {
         return Ok(left_level.cmp(&right_level));
     }
@@ -952,54 +952,131 @@ fn escape_scalar_string(value: &[u8], start: usize, end: usize, json: &mut Strin
     json.push('\"');
 }
 
-
-pub fn convert_row(value: &[u8], buf: &mut Vec<u8>) {
+pub fn convert_to_comparable(value: &[u8], buf: &mut Vec<u8>) {
     if !is_jsonb(value) {
         buf.push(97);
         buf.extend_from_slice(value);
         return;
     }
+    let depth = 0;
     let header = read_u32(value, 0).unwrap();
     match header & CONTAINER_HEADER_TYPE_MASK {
         SCALAR_CONTAINER_TAG => {
             let encoded = read_u32(value, 4).unwrap();
             let jentry = JEntry::decode_jentry(encoded);
-            convert_scalar_row(&jentry, &value[8..], buf);
+            scalar_convert_to_comparable(depth, &jentry, &value[8..], buf, false);
         }
-        _ => todo!(),
+        ARRAY_CONTAINER_TAG => {
+            buf.push(depth);
+            buf.push(6);
+            let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+            array_convert_to_comparable(depth + 1, length, &value[4..], buf);
+        }
+        OBJECT_CONTAINER_TAG => {
+            buf.push(depth);
+            buf.push(5);
+            let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+            object_convert_to_comparable(depth + 1, length, &value[4..], buf);
+        }
+        _ => {}
     }
 }
 
 // null > arr > obj > str > num > true > false
 //  7     6     5     4     3      2      1
 //  104   103   102   101   100    99     98
-fn convert_scalar_row(jentry: &JEntry, value: &[u8], buf: &mut Vec<u8>) {
+fn scalar_convert_to_comparable(
+    depth: u8,
+    jentry: &JEntry,
+    value: &[u8],
+    buf: &mut Vec<u8>,
+    reverse: bool,
+) {
+    buf.push(depth);
+    let level = jentry_compare_level(jentry);
     match jentry.type_code {
-        NULL_TAG => {
-            buf.push(104);
+        CONTAINER_TAG => {
+            let header = read_u32(value, 0).unwrap();
+            let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+            match header & CONTAINER_HEADER_TYPE_MASK {
+                ARRAY_CONTAINER_TAG => {
+                    buf.push(level + 1);
+                    array_convert_to_comparable(depth + 1, length, &value[4..], buf);
+                }
+                OBJECT_CONTAINER_TAG => {
+                    buf.push(level);
+                    object_convert_to_comparable(depth + 1, length, &value[4..], buf);
+                }
+                _ => {}
+            }
         }
-        STRING_TAG => {
-            buf.push(101);
-            let offset = jentry.length as usize;
-            buf.extend_from_slice(&value[..offset]);
+        _ => {
+            if reverse {
+                buf.push(u8::MAX - level);
+            } else {
+                buf.push(level);
+            }
+            match jentry.type_code {
+                STRING_TAG => {
+                    let length = jentry.length as usize;
+                    buf.extend_from_slice(&value[..length]);
+                }
+                NUMBER_TAG => {
+                    buf.push(level);
+                    let length = jentry.length as usize;
+                    let num = Number::decode(&value[..length]);
+                    let v = num.as_f64().unwrap();
+                    // https://github.com/rust-lang/rust/blob/9c20b2a8cc7588decb6de25ac6a7912dcef24d65/library/core/src/num/f32.rs#L1176-L1260
+                    let s = v.to_bits() as i64;
+                    let val = s ^ (((s >> 63) as u64) >> 1) as i64;
+                    buf.extend_from_slice(&val.to_be_bytes());
+                }
+                _ => {}
+            }
         }
-        NUMBER_TAG => {
-            buf.push(100);
-            let offset = jentry.length as usize;
-            let num = Number::decode(&value[..offset]);
-            let v = num.as_f64().unwrap();
-            // https://github.com/rust-lang/rust/blob/9c20b2a8cc7588decb6de25ac6a7912dcef24d65/library/core/src/num/f32.rs#L1176-L1260
-            let s = v.to_bits() as i64;
-            let val = s ^ (((s >> 63) as u64) >> 1) as i64;
-            buf.extend_from_slice(&val.to_be_bytes());
-        }
-        TRUE_TAG => {
-            buf.push(99);
-        }
-        FALSE_TAG => {
-            buf.push(98);
-        }
-        _ => unreachable!(),
+    }
+}
+
+fn array_convert_to_comparable(depth: u8, length: usize, value: &[u8], buf: &mut Vec<u8>) {
+    let mut jentry_offset = 0;
+    let mut val_offset = 4 * length;
+    for _ in 0..length {
+        let encoded = read_u32(value, jentry_offset).unwrap();
+        let jentry = JEntry::decode_jentry(encoded);
+        scalar_convert_to_comparable(depth, &jentry, &value[val_offset..], buf, false);
+        jentry_offset += 4;
+        val_offset += jentry.length as usize;
+    }
+}
+
+fn object_convert_to_comparable(depth: u8, length: usize, value: &[u8], buf: &mut Vec<u8>) {
+    let mut jentry_offset = 0;
+    let mut val_offset = 8 * length;
+
+    // read all key jentries first
+    let mut key_jentries: VecDeque<JEntry> = VecDeque::with_capacity(length);
+    for _ in 0..length {
+        let encoded = read_u32(value, jentry_offset).unwrap();
+        let key_jentry = JEntry::decode_jentry(encoded);
+
+        jentry_offset += 4;
+        val_offset += key_jentry.length as usize;
+        key_jentries.push_back(key_jentry);
+    }
+
+    let mut key_offset = 8 * length;
+    for _ in 0..length {
+        // first compare key, if keys are equal, then compare the value
+        let key_jentry = key_jentries.pop_front().unwrap();
+        scalar_convert_to_comparable(depth, &key_jentry, &value[key_offset..], buf, true);
+
+        let encoded = read_u32(value, jentry_offset).unwrap();
+        let val_jentry = JEntry::decode_jentry(encoded);
+        scalar_convert_to_comparable(depth, &val_jentry, &value[val_offset..], buf, false);
+
+        jentry_offset += 4;
+        key_offset += key_jentry.length as usize;
+        val_offset += val_jentry.length as usize;
     }
 }
 
