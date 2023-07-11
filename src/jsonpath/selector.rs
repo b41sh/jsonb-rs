@@ -48,11 +48,17 @@ enum ExprValue<'a> {
     Value(Box<PathValue<'a>>),
 }
 
+/// Mode determines the different forms of the return value.
 #[derive(Clone, PartialEq, Debug)]
 pub enum Mode {
+    /// Only return the first jsonb value.
     First,
+    /// Return all values as a jsonb Array.
     Array,
+    /// Return each jsonb value separately.
     All,
+    /// If there are multiple values, return a jsonb Array,
+    /// if there is only one value, return the jsonb value directly.
     Mixed,
 }
 
@@ -62,18 +68,11 @@ pub struct Selector<'a> {
 }
 
 impl<'a> Selector<'a> {
-    pub fn new(json_path: JsonPath<'a>) -> Self {
-        Self {
-            json_path,
-            mode: Mode::All,
-        }
-    }
-
-    pub fn new_with_mode(json_path: JsonPath<'a>, mode: Mode) -> Self {
+    pub fn new(json_path: JsonPath<'a>, mode: Mode) -> Self {
         Self { json_path, mode }
     }
 
-    pub fn nselect(&'a self, root: &'a [u8], data: &mut Vec<u8>, offsets: &mut Vec<u64>) {
+    pub fn select(&'a self, root: &'a [u8], data: &mut Vec<u8>, offsets: &mut Vec<u64>) {
         let mut poses = VecDeque::new();
         poses.push_back(Position::Container((0, root.len())));
 
@@ -127,60 +126,6 @@ impl<'a> Selector<'a> {
                 }
             }
         }
-    }
-
-    pub fn select(&'a self, value: &'a [u8]) -> Vec<Vec<u8>> {
-        let root = value;
-        let mut poses = VecDeque::new();
-        poses.push_back(Position::Container((0, value.len())));
-
-        for path in self.json_path.paths.iter() {
-            match path {
-                &Path::Root => {
-                    continue;
-                }
-                &Path::Current => unreachable!(),
-                Path::FilterExpr(expr) => {
-                    let len = poses.len();
-                    for _ in 0..len {
-                        let pos = poses.pop_front().unwrap();
-                        if self.filter_expr(root, &pos, expr) {
-                            poses.push_back(pos);
-                        }
-                    }
-                }
-                _ => {
-                    let len = poses.len();
-                    for _ in 0..len {
-                        let pos = poses.pop_front().unwrap();
-                        match pos {
-                            Position::Container((offset, length)) => {
-                                self.select_path(root, offset, length, path, &mut poses);
-                            }
-                            Position::Scalar(_) => {
-                                // In lax mode, bracket wildcard allow Scalar value.
-                                if path == &Path::BracketWildcard {
-                                    poses.push_back(pos);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let mut values = Vec::new();
-        while let Some(pos) = poses.pop_front() {
-            match pos {
-                Position::Container((offset, length)) => {
-                    values.push(root[offset..offset + length].to_vec());
-                }
-                Position::Scalar((ty, offset, length)) => {
-                    let val = Self::build_scalar_buf(ty, length, &root[offset..offset + length]);
-                    values.push(val);
-                }
-            }
-        }
-        values
     }
 
     fn select_path(
@@ -359,16 +304,12 @@ impl<'a> Selector<'a> {
         }
     }
 
-    fn build_scalar_buf(jty: u32, jlength: usize, val: &'a [u8]) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(8 + jlength);
-        buf.write_u32::<BigEndian>(SCALAR_CONTAINER_TAG).unwrap();
-        let jentry = jty | jlength as u32;
-        buf.write_u32::<BigEndian>(jentry).unwrap();
-        buf.extend_from_slice(val);
-        buf
-    }
-
-    fn build_values(root: &'a [u8], poses: &mut VecDeque<Position>, data: &mut Vec<u8>, offsets: &mut Vec<u64>) {
+    fn build_values(
+        root: &'a [u8],
+        poses: &mut VecDeque<Position>,
+        data: &mut Vec<u8>,
+        offsets: &mut Vec<u64>,
+    ) {
         while let Some(pos) = poses.pop_front() {
             match pos {
                 Position::Container((offset, length)) => {
