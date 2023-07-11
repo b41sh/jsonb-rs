@@ -57,6 +57,67 @@ impl<'a> Selector<'a> {
         Self { json_path }
     }
 
+    pub fn nselect(&'a self, value: &'a [u8], data: &mut Vec<u8>, offsets: &mut Vec<u64>) {
+        let root = value;
+        let mut poses = VecDeque::new();
+        poses.push_back(Position::Container((0, value.len())));
+
+        for path in self.json_path.paths.iter() {
+            match path {
+                &Path::Root => {
+                    continue;
+                }
+                &Path::Current => unreachable!(),
+                Path::FilterExpr(expr) => {
+                    let len = poses.len();
+                    for _ in 0..len {
+                        let pos = poses.pop_front().unwrap();
+                        if self.filter_expr(root, &pos, expr) {
+                            poses.push_back(pos);
+                        }
+                    }
+                }
+                _ => {
+                    let len = poses.len();
+                    for _ in 0..len {
+                        let pos = poses.pop_front().unwrap();
+                        match pos {
+                            Position::Container((offset, length)) => {
+                                self.select_path(root, offset, length, path, &mut poses);
+                            }
+                            Position::Scalar(_) => {
+                                // In lax mode, bracket wildcard allow Scalar value.
+                                if path == &Path::BracketWildcard {
+                                    poses.push_back(pos);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut data_offset = match offsets.last() {
+            Some(off) => *off,
+            None => 0,
+        };
+        while let Some(pos) = poses.pop_front() {
+            match pos {
+                Position::Container((offset, length)) => {
+                    data.extend_from_slice(&root[offset..offset + length]);
+                }
+                Position::Scalar((ty, offset, length)) => {
+                    data.write_u32::<BigEndian>(SCALAR_CONTAINER_TAG).unwrap();
+                    let jentry = ty | length as u32;
+                    data.write_u32::<BigEndian>(jentry).unwrap();
+                    data.extend_from_slice(&root[offset..offset + length]);
+                }
+            }
+            data_offset += data.len() as u64;
+            offsets.push(data_offset);
+        }
+    }
+
     pub fn select(&'a self, value: &'a [u8]) -> Vec<Vec<u8>> {
         let root = value;
         let mut poses = VecDeque::new();
