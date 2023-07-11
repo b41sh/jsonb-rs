@@ -97,10 +97,6 @@ impl<'a> Selector<'a> {
             }
         }
 
-        let mut data_offset = match offsets.last() {
-            Some(off) => *off,
-            None => 0,
-        };
         while let Some(pos) = poses.pop_front() {
             match pos {
                 Position::Container((offset, length)) => {
@@ -113,8 +109,7 @@ impl<'a> Selector<'a> {
                     data.extend_from_slice(&root[offset..offset + length]);
                 }
             }
-            data_offset += data.len() as u64;
-            offsets.push(data_offset);
+            offsets.push(data.len() as u64);
         }
     }
 
