@@ -48,13 +48,28 @@ enum ExprValue<'a> {
     Value(Box<PathValue<'a>>),
 }
 
+#[derive(PartialEq, Debug)]
+pub enum Mode {
+    First,
+    Array,
+    All,
+}
+
 pub struct Selector<'a> {
     json_path: JsonPath<'a>,
+    mode: Mode,
 }
 
 impl<'a> Selector<'a> {
     pub fn new(json_path: JsonPath<'a>) -> Self {
-        Self { json_path }
+        Self {
+            json_path,
+            mode: Mode::All,
+        }
+    }
+
+    pub fn new_with_mode(json_path: JsonPath<'a>, mode: Mode) -> Self {
+        Self { json_path, mode }
     }
 
     pub fn nselect(&'a self, value: &'a [u8], data: &mut Vec<u8>, offsets: &mut Vec<u64>) {
@@ -97,19 +112,57 @@ impl<'a> Selector<'a> {
             }
         }
 
-        while let Some(pos) = poses.pop_front() {
-            match pos {
-                Position::Container((offset, length)) => {
-                    data.extend_from_slice(&root[offset..offset + length]);
-                }
-                Position::Scalar((ty, offset, length)) => {
-                    data.write_u32::<BigEndian>(SCALAR_CONTAINER_TAG).unwrap();
-                    let jentry = ty | length as u32;
-                    data.write_u32::<BigEndian>(jentry).unwrap();
-                    data.extend_from_slice(&root[offset..offset + length]);
+        if self.mode == Mode::First {
+            poses.truncate(1);
+        }
+
+        match self.mode {
+            Mode::All | Mode::First => {
+                while let Some(pos) = poses.pop_front() {
+                    match pos {
+                        Position::Container((offset, length)) => {
+                            data.extend_from_slice(&root[offset..offset + length]);
+                        }
+                        Position::Scalar((ty, offset, length)) => {
+                            data.write_u32::<BigEndian>(SCALAR_CONTAINER_TAG).unwrap();
+                            let jentry = ty | length as u32;
+                            data.write_u32::<BigEndian>(jentry).unwrap();
+                            if length > 0 {
+                                data.extend_from_slice(&root[offset..offset + length]);
+                            }
+                        }
+                    }
+                    offsets.push(data.len() as u64);
                 }
             }
-            offsets.push(data.len() as u64);
+            Mode::Array => {
+                let len = poses.len();
+                let header = ARRAY_CONTAINER_TAG | len as u32;
+                // write header.
+                data.write_u32::<BigEndian>(header).unwrap();
+                let mut jentry_offset = data.len();
+                // reserve space for jentry.
+                data.resize(jentry_offset + 4 * len, 0);
+                while let Some(pos) = poses.pop_front() {
+                    let jentry = match pos {
+                        Position::Container((offset, length)) => {
+                            data.extend_from_slice(&root[offset..offset + length]);
+                            CONTAINER_TAG | length as u32
+                        }
+                        Position::Scalar((ty, offset, length)) => {
+                            if length > 0 {
+                                data.extend_from_slice(&root[offset..offset + length]);
+                            }
+                            ty | length as u32
+                        }
+                    };
+                    for (i, b) in jentry.to_be_bytes().iter().enumerate() {
+                        data[jentry_offset + i] = *b;
+                    }
+                    jentry_offset += 4;
+                }
+                offsets.push(data.len() as u64);
+            }
         }
     }
 
