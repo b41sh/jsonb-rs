@@ -48,7 +48,7 @@ enum ExprValue<'a> {
     Value(Box<PathValue<'a>>),
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Mode {
     First,
     Array,
