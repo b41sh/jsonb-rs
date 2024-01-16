@@ -21,7 +21,7 @@ use crate::{
     jentry::JEntry,
 };
 
-enum Entry<'a> {
+pub(crate) enum Entry<'a> {
     ArrayBuilder(ArrayBuilder<'a>),
     ObjectBuilder(ObjectBuilder<'a>),
     Raw(JEntry, &'a [u8]),

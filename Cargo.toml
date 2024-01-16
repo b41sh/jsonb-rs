@@ -34,6 +34,7 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 serde_json = { version = "1.0.107", default-features = false, features = [
   "preserve_order",
 ] }
+simdutf8 = "0.1.4"
 
 [dev-dependencies]
 goldenfile = "1.5.2"

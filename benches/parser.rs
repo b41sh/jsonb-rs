@@ -21,6 +21,11 @@ fn parse_jsonb(data: &[u8]) {
     let _v: jsonb::Value = jsonb::parse_value(data).unwrap();
 }
 
+fn parse_new_jsonb(data: &[u8]) {
+    let mut parser = jsonb::new_parser::Parser::new();
+    let _buf = parser.parse(data).unwrap();
+}
+
 fn parse_serde_json(data: &[u8]) {
     let _v: serde_json::Value = serde_json::from_slice(data).unwrap();
 }
@@ -48,6 +53,10 @@ fn add_benchmark(c: &mut Criterion) {
 
         c.bench_function(&format!("jsonb parse {}", file), |b| {
             b.iter(|| parse_jsonb(&bytes))
+        });
+
+        c.bench_function(&format!("jsonb new parse {}", file), |b| {
+            b.iter(|| parse_new_jsonb(&bytes))
         });
 
         c.bench_function(&format!("serde_json parse {}", file), |b| {
