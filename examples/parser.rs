@@ -15,16 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fs::File;
-use std::io::{BufReader, Seek};
-use std::time::Instant;
+use std::fs;
+
+//use std::fs::File;
+//use std::io::{BufReader, Seek};
+//use std::time::Instant;
 
 use jsonb::new_parser::Parser;
+use jsonb::Error;
+use jsonb::to_string;
+use jsonb::to_pretty_string;
 
 // cargo run --example parser --release
-fn main() -> Result<()> {
+fn main() -> Result<(), Error> {
+    use std::env;
+    let args: Vec<String> = env::args().collect();
 
-     let s = r#"{"abcd":12.34,                                                                                   "xxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaa    aaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaa    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaa    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaa    aaaaaaaaaaaaaax":444.55, "glossary":{"title":"example glossary","GlossDiv":{"title":"S","GlossList":            {"GlossEntry":{"ID":"SGML","SortAs":"SGML","GlossTerm":"Standard Generalized Markup Language","Acronym":        "SGML","Abbrev":"ISO 8879:1986","GlossDef":{"para":"A meta-markup language, used to create markup languages     such as DocBook.","GlossSeeAlso":["GML","XML"]},"GlossSee":"markup"}}}}}"#.to_string();
+     let s = r#"{"abcd":12.34,                                                 "xxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaxxxaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaax":444.55, "glossary":{"title":"example glossary","GlossDiv":{"title":"S","GlossList":            {"GlossEntry":{"ID":"SGML","SortAs":"SGML","GlossTerm":"Standard Generalized Markup Language","Acronym":        "SGML","Abbrev":"ISO 8879:1986","GlossDef":{"para":"A meta-markup language, used to create markup languages     such as DocBook.","GlossSeeAlso":["GML","XML"]},"GlossSee":"markup"}}}}}"#.to_string();
 
     println!("s={:?}", s);
     let data = s.into_bytes();
@@ -32,6 +39,24 @@ fn main() -> Result<()> {
     let mut parser = Parser::new();
     let buf = parser.parse(&data).unwrap();
     println!("buf={:?}", buf);
+
+    let s = to_string(&buf);
+    println!("\ns={}", s);
+    let ss = to_pretty_string(&buf);
+    println!("\nss={}", ss);
+
+    println!("\n\n\n");
+
+    let file_path = &args[1];
+    let c = fs::read(file_path).unwrap();
+
+    let buf = parser.parse(&c).unwrap();
+    println!("buf={:?}", buf);
+
+    let s = to_string(&buf);
+    println!("\ns={}", s);
+    let ss = to_pretty_string(&buf);
+    println!("\nss={}", ss);
 
     Ok(())
 }

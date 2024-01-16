@@ -97,7 +97,8 @@ pub enum Tape {
     // Number(Number),
     // String(Vec<StringAtom>),
     Number(f64),
-    String(String),
+    KeyString(String),
+    String((usize, usize)),
     Array(Vec<usize>),
     Object(BTreeMap<String, usize>),
 }
@@ -214,12 +215,12 @@ impl Parser {
             _ => todo!(),
         }
 
-        println!("buf={:?}", buf);
+        //println!("buf={:?}", buf);
 
         Ok(buf)
     }
 
-    fn stage3<'a>(&'a self, i: usize, tapes: &'a Vec<Tape>, data: &[u8]) -> Result<Entry, ParseError> {
+    fn stage3<'a>(&'a self, i: usize, tapes: &'a Vec<Tape>, data: &'a [u8]) -> Result<Entry, ParseError> {
         let tape = unsafe { tapes.get_unchecked(i) };
         let entry = match tape {
             Tape::Object(objs) => {
@@ -270,8 +271,12 @@ impl Parser {
                 let entry = Entry::Raw(JEntry::make_false_jentry(), &[]);
                 entry
             }
-            Tape::String(s) => {
+            Tape::KeyString(s) => {
                 let entry = Entry::Raw(JEntry::make_string_jentry(s.len()), s.as_bytes());
+                entry
+            }
+            Tape::String((i, j)) => {
+                let entry = Entry::Raw(JEntry::make_string_jentry(j - i - 1), &data[i+1..*j]);
                 entry
             }
             Tape::Number(_) => {
@@ -395,7 +400,7 @@ impl Parser {
             // let o_state = state.clone();
             match c {
                 '{' => {
-                    if !matches!(state, State::Init | State::ObjectField | State::ArrayValue) {
+                    if !matches!(state, State::Init | State::ObjectField | State::ObjectContinue | State::ArrayBegin | State::ArrayValue | State::ArrayContinue) {
                         println!("obj begin invalid state={:?}", state);
                     }
                     state = State::ObjectBegin;
@@ -431,7 +436,7 @@ impl Parser {
                     };
                 }
                 '[' => {
-                    if !matches!(state, State::Init | State::ObjectField | State::ArrayValue) {
+                    if !matches!(state, State::Init | State::ObjectField | State::ObjectContinue | State::ArrayBegin | State::ArrayValue | State::ArrayContinue) {
                         println!("arr begin invalid state={:?}", state);
                     }
                     state = State::ArrayBegin;
@@ -491,11 +496,15 @@ impl Parser {
                             if next_c != '"' {
                                 return Err(ParseError);
                             }
-                            let v = &data[i + 1..j];
-                            Tape::String(String::from_utf8_lossy(v).to_string())
+                            if matches!(state, State::ObjectBegin | State::ObjectContinue) {
+                                let v = &data[i + 1..j];
+                                Tape::KeyString(String::from_utf8_lossy(v).to_string())
+                            } else {
+                                Tape::String((i, j))
+                            }
                         }
                         '-' | '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
-                            let s = &data[i + 1..];
+                            let s = &data[i..];
                             let (x, _) = fast_float::parse_partial::<f64, _>(s).unwrap();
                             Tape::Number(x)
                         }
@@ -517,7 +526,7 @@ impl Parser {
                             let (parent_tap, _) = unsafe { stack.get_unchecked_mut(last_idx) };
                             match parent_tap {
                                 Tape::Object(obj_tap) => match atom_tape {
-                                    Tape::String(ref s) => {
+                                    Tape::KeyString(ref s) => {
                                         obj_tap.insert(s.clone(), tapes.len());
                                     }
                                     _ => todo!(),
