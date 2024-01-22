@@ -65,7 +65,7 @@ fn stage3<'a>(i: usize, nodes: &'a Vec<Node>) -> Result<(Entry<'a>, usize), Pars
                 idx += inner_count;
             }
             //println!("object len={:?} count={:?}", len, count);
-            (Entry::ObjectBuilder(obj_builder), *count)
+            (Entry::ObjectBuilder(obj_builder), *count + 1)
         }
         Node::Array { len, count } => {
             //println!("array len={:?} count={:?}", len, count);
@@ -89,7 +89,7 @@ fn stage3<'a>(i: usize, nodes: &'a Vec<Node>) -> Result<(Entry<'a>, usize), Pars
                 }
                 idx += inner_count;
             }
-            (Entry::ArrayBuilder(arr_builder), *count)
+            (Entry::ArrayBuilder(arr_builder), *count + 1)
         }
         Node::Static(static_node) => {
             //let entry = Entry::Raw(JEntry::make_null_jentry(), &[]);
