@@ -147,12 +147,14 @@ union IndexerChoices {
 
 pub struct Parser {
     tag: u8,
-    inner: IndexerChoices,
+    //inner: IndexerChoices,
+    inner: Avx2Indexer,
     structural_indexes: Vec<u32>,
 }
 
 impl Parser {
     pub fn new() -> Self {
+        /**
         #[cfg(target_arch = "x86_64")]
         {
             if is_x86_feature_detected!("avx2") {
@@ -169,6 +171,14 @@ impl Parser {
         Self {
             tag: 0,
             inner: IndexerChoices { fallback },
+            structural_indexes: Vec::new(),
+        }
+        */
+
+        let avx2 = Avx2Indexer::new();
+        Self {
+            tag: 1,
+            inner: avx2,
             structural_indexes: Vec::new(),
         }
     }
@@ -200,6 +210,7 @@ impl Parser {
     pub fn parse(&mut self, data: &[u8]) -> Result<Vec<u8>, ParseError> {
         self.stage0(data)?;
         self.stage1(data)?;
+/**
         let tapes = self.stage2(data)?;
 
         let mut buf = Vec::new();
@@ -214,8 +225,9 @@ impl Parser {
             }
             _ => todo!(),
         }
-
+*/
         //println!("buf={:?}", buf);
+        let buf = Vec::new();
 
         Ok(buf)
     }
@@ -237,6 +249,7 @@ impl Parser {
                         Entry::Raw(jentry, val) => {
                             obj_builder.push_raw(key, jentry, val);
                         }
+                        _ => {}
                     }
                 }
                 Entry::ObjectBuilder(obj_builder)
@@ -255,6 +268,7 @@ impl Parser {
                         Entry::Raw(jentry, val) => {
                             arr_builder.push_raw(jentry, val);
                         }
+                        _ => {}
                     }
                 }
                 Entry::ArrayBuilder(arr_builder)
@@ -570,11 +584,14 @@ impl Parser {
 
     // 1. 获取到 backslash_bits 和 quote_bits  需要 SIMD
     fn cmp_mask(&mut self, data: &[u8]) -> Result<(u64, u64), ParseError> {
+        /**
         match self.tag {
             0 => unsafe { &mut self.inner.fallback }.cmp_mask(data),
             1 => unsafe { &mut self.inner.avx2 }.cmp_mask(data),
             _ => unreachable!(),
         }
+        */
+        self.inner.cmp_mask(data)
     }
 
     // 2. 获取需要转义的字符串位置，不需要 SIMD
@@ -656,12 +673,14 @@ impl Parser {
         prev_iter_inside_quote: &mut u64,
     ) -> u64 {
         *quote_bits &= !odd_ends;
-
+/**
         let mut quote_mask = match self.tag {
             0 => unsafe { &mut self.inner.fallback }.compute_quote_mask(*quote_bits),
             1 => unsafe { &mut self.inner.avx2 }.compute_quote_mask(*quote_bits),
             _ => unreachable!(),
         };
+*/
+        let mut quote_mask = self.inner.compute_quote_mask(*quote_bits);
 
         quote_mask ^= *prev_iter_inside_quote;
 
@@ -672,6 +691,7 @@ impl Parser {
 
     // 3. 找到 空白字符和结构字符，需要 SIMD
     fn find_whitespace_and_structurals(&mut self, whitespace: &mut u64, structurals: &mut u64) {
+        /**
         match self.tag {
             0 => unsafe { &mut self.inner.fallback }
                 .find_whitespace_and_structurals(whitespace, structurals),
@@ -679,6 +699,8 @@ impl Parser {
                 .find_whitespace_and_structurals(whitespace, structurals),
             _ => unreachable!(),
         }
+        */
+        self.inner.find_whitespace_and_structurals(whitespace, structurals)
     }
 
     // 4. 处理索引结构，不需要 SIMD
@@ -723,6 +745,7 @@ impl Parser {
 
     // fn index_extract(&mut self, structurals: u64, base: &mut Vec<u32>) {
     fn index_extract(&mut self, structurals: u64, idx: u32) {
+        /**
         match self.tag {
             0 => unsafe { &mut self.inner.fallback }.index_extract(
                 structurals,
@@ -736,5 +759,12 @@ impl Parser {
             ),
             _ => unreachable!(),
         }
+        */
+        self.inner.index_extract(
+            structurals,
+            idx,
+            &mut self.structural_indexes,
+        )
     }
 }
+

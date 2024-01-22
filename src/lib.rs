@@ -79,6 +79,7 @@ mod ser;
 mod util;
 mod value;
 pub mod new_parser;
+pub mod nparser;
 
 pub use de::from_slice;
 pub use error::Error;

@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use byteorder::{BigEndian, WriteBytesExt};
 
 use crate::{
+    number::Number,
     constants::{ARRAY_CONTAINER_TAG, OBJECT_CONTAINER_TAG},
     jentry::JEntry,
 };
@@ -24,6 +25,7 @@ use crate::{
 pub(crate) enum Entry<'a> {
     ArrayBuilder(ArrayBuilder<'a>),
     ObjectBuilder(ObjectBuilder<'a>),
+    Number(Number),
     Raw(JEntry, &'a [u8]),
 }
 
@@ -40,6 +42,10 @@ impl<'a> ArrayBuilder<'a> {
 
     pub(crate) fn push_raw(&mut self, jentry: JEntry, data: &'a [u8]) {
         self.entries.push(Entry::Raw(jentry, data));
+    }
+
+    pub(crate) fn push_number(&mut self, number: Number) {
+        self.entries.push(Entry::Number(number));
     }
 
     pub(crate) fn push_array(&mut self, builder: ArrayBuilder<'a>) {
@@ -79,6 +85,10 @@ impl<'a> ObjectBuilder<'a> {
 
     pub(crate) fn push_raw(&mut self, key: &'a str, jentry: JEntry, data: &'a [u8]) {
         self.entries.insert(key, Entry::Raw(jentry, data));
+    }
+
+    pub(crate) fn push_number(&mut self, key: &'a str, number: Number) {
+        self.entries.insert(key, Entry::Number(number));
     }
 
     pub(crate) fn push_array(&mut self, key: &'a str, builder: ArrayBuilder<'a>) {
@@ -122,6 +132,10 @@ fn write_entry(buf: &mut Vec<u8>, entry: Entry<'_>) -> JEntry {
         Entry::ObjectBuilder(builder) => {
             let size = builder.build_into(buf);
             JEntry::make_container_jentry(size)
+        }
+        Entry::Number(number) => {
+            let len = number.compact_encode(buf).unwrap();
+            JEntry::make_number_jentry(len)
         }
         Entry::Raw(jentry, data) => {
             buf.extend_from_slice(data);
