@@ -34,8 +34,7 @@ pub fn nparse(data: &mut [u8]) -> Result<Vec<u8>, ParseError> {
 }
 
 fn stage3<'a>(i: usize, nodes: &'a Vec<Node>) -> Result<(Entry<'a>, usize), ParseError> {
-    println!("nodes={:?}", nodes);
-
+    //println!("nodes={:?}", nodes);
     let node = unsafe { nodes.get_unchecked(i) };
     let (entry, count) = match node {
         Node::Object { len, count } => {
@@ -69,8 +68,7 @@ fn stage3<'a>(i: usize, nodes: &'a Vec<Node>) -> Result<(Entry<'a>, usize), Pars
             (Entry::ObjectBuilder(obj_builder), *count)
         }
         Node::Array { len, count } => {
-            println!("array len={:?} count={:?}", len, count);
-
+            //println!("array len={:?} count={:?}", len, count);
             let mut idx = i + 1;
             let mut arr_builder = ArrayBuilder::new(*len);
             for _ in 0..*len {
