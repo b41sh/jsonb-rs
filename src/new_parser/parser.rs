@@ -16,10 +16,10 @@ use crate::builder::Entry;
 //    target_feature = "avx2"
 //))]
 //use x86intrin::{m256i, mm256_cmpeq_epi8, mm256_movemask_epi8};
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    target_feature = "avx2"
-))]
+//#[cfg(all(
+//    any(target_arch = "x86", target_arch = "x86_64"),
+//    target_feature = "avx2"
+//))]
 use crate::new_parser::avx2::{m256i, mm256i, mbitmap, u8_to_m256i, compute_quote_mask, make_low_nibble_mask, make_high_nibble_mask, find_whitespace_and_structurals, index_extract };
 //#[cfg(not(target_feature = "avx2"))]
 //use crate::new_parser::emulated::{m256i, mm256i, mbitmap, u8_to_m256i, compute_quote_mask, make_low_nibble_mask, make_high_nibble_mask, find_whitespace_and_structurals, index_extract };
