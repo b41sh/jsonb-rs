@@ -11,7 +11,21 @@ use crate::builder::ArrayBuilder;
 use crate::builder::ObjectBuilder;
 use crate::builder::Entry;
 
+//#[cfg(all(
+//    any(target_arch = "x86", target_arch = "x86_64"),
+//    target_feature = "avx2"
+//))]
+//use x86intrin::{m256i, mm256_cmpeq_epi8, mm256_movemask_epi8};
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    target_feature = "avx2"
+))]
+use crate::new_parser::avx2::{m256i, mm256i, mbitmap, u8_to_m256i, compute_quote_mask, make_low_nibble_mask, make_high_nibble_mask, find_whitespace_and_structurals, index_extract };
+//#[cfg(not(target_feature = "avx2"))]
+//use crate::new_parser::emulated::{m256i, mm256i, mbitmap, u8_to_m256i, compute_quote_mask, make_low_nibble_mask, make_high_nibble_mask, find_whitespace_and_structurals, index_extract };
 
+
+//use crate::new_parser::avx2::{m256i, mm256_cmpeq_epi8, mm256_movemask_epi8};
 const EVEN_BITS_MASK: u64 = 0x5555_5555_5555_5555;
 const ODD_BITS_MASK: u64 = !EVEN_BITS_MASK;
 
@@ -146,6 +160,15 @@ union IndexerChoices {
 }
 
 pub struct Parser {
+    backslash_mask: m256i,
+    quote_mask: m256i,
+
+    low_nibble_mask: m256i,
+    high_nibble_mask: m256i,
+    structural_shufti_mask: m256i,
+    whitespace_shufti_mask: m256i,
+
+
     tag: u8,
     //inner: IndexerChoices,
     inner: Avx2Indexer,
@@ -175,8 +198,25 @@ impl Parser {
         }
         */
 
+        let backslash_mask = mm256i('\\' as i8);
+        let quote_mask = mm256i('"' as i8);
+
+        let low_nibble_mask = make_low_nibble_mask();
+        let high_nibble_mask = make_high_nibble_mask();
+
+        let structural_shufti_mask = mm256i(0x7);
+        let whitespace_shufti_mask = mm256i(0x18);
+
+
         let avx2 = Avx2Indexer::new();
         Self {
+            backslash_mask,
+            quote_mask,
+            low_nibble_mask,
+            high_nibble_mask,
+            structural_shufti_mask,
+            whitespace_shufti_mask,
+
             tag: 1,
             inner: avx2,
             structural_indexes: Vec::new(),
@@ -341,7 +381,12 @@ impl Parser {
 
         let mut tmpbuf: [u8; SIMD_INPUT_LENGTH] = [0x20; SIMD_INPUT_LENGTH];
 
-        while idx < data.len() {
+        let ll = data.len() % SIMD_INPUT_LENGTH;
+        let ll2 = data.len() - ll;
+
+        //while idx < data.len() {
+        while idx < ll2 {
+            /**
             let val = if idx + SIMD_INPUT_LENGTH < data.len() {
                 // let val = &data[idx..idx + SIMD_INPUT_LENGTH];
                 // println!("val.len={:?}  val={:?}", val.len(), val);
@@ -356,9 +401,14 @@ impl Parser {
                 // println!("tmpbuf.len={:?}  tmpbuf={:?}", tmpbuf.len(), tmpbuf);
                 &tmpbuf
             };
+            */
+
+            let val = &data[idx..idx + SIMD_INPUT_LENGTH];
+
+
 
             // 1. 获取到 backslash_bits 和 quote_bits  需要 SIMD
-            let (backslash_bits, mut quote_bits) = self.cmp_mask(val)?;
+            let (v0, v1, backslash_bits, mut quote_bits) = self.cmp_mask(val)?;
 
             // println!("backslash      ={:#066b}", backslash_bits);
             // println!("quote          ={:#066b}", quote_bits);
@@ -378,7 +428,7 @@ impl Parser {
             // println!("prev__quote    ={:#066b}", prev_iter_inside_quote);
 
             // 3. 找到 空白字符和结构字符，需要 SIMD
-            self.find_whitespace_and_structurals(&mut whitespace, &mut structurals);
+            self.find_whitespace_and_structurals(&v0, &v1, &mut whitespace, &mut structurals);
             // println!("whitespace     ={:#066b}", whitespace);
             // println!("structurals    ={:#066b}", structurals);
 
@@ -583,7 +633,7 @@ impl Parser {
     }
 
     // 1. 获取到 backslash_bits 和 quote_bits  需要 SIMD
-    fn cmp_mask(&mut self, data: &[u8]) -> Result<(u64, u64), ParseError> {
+    fn cmp_mask(&mut self, data: &[u8]) -> Result<(m256i, m256i, u64, u64), ParseError> {
         /**
         match self.tag {
             0 => unsafe { &mut self.inner.fallback }.cmp_mask(data),
@@ -591,7 +641,33 @@ impl Parser {
             _ => unreachable!(),
         }
         */
-        self.inner.cmp_mask(data)
+
+
+
+        let v0 = unsafe { u8_to_m256i(data, 0) };
+        let v1 = unsafe { u8_to_m256i(data, 32) };
+
+        //let backslash_mask = mm256i('\\' as i8);
+        //let quote_mask = mm256i('"' as i8);
+
+        let backslash = unsafe { mbitmap(&v0, &v1, &self.backslash_mask) };
+        let quote = unsafe { mbitmap(&v0, &v1, &self.quote_mask) };
+
+/**
+        let v0 = unsafe { _mm256_loadu_si256(data.as_ptr().cast::<__m256i>()) };
+        let v1 = unsafe { _mm256_loadu_si256(data.as_ptr().add(32).cast::<__m256i>()) };
+
+        self.v0 = v0;
+        self.v1 = v1;
+
+        let backslash = cmp(v0, v1, self.backslash_mask);
+        let quote = cmp(v0, v1, self.quote_mask);
+
+        Ok((backslash, quote))
+*/
+
+        //self.inner.cmp_mask(data)
+        Ok((v0, v1, backslash, quote))
     }
 
     // 2. 获取需要转义的字符串位置，不需要 SIMD
@@ -680,7 +756,7 @@ impl Parser {
             _ => unreachable!(),
         };
 */
-        let mut quote_mask = self.inner.compute_quote_mask(*quote_bits);
+        let mut quote_mask = compute_quote_mask(*quote_bits);
 
         quote_mask ^= *prev_iter_inside_quote;
 
@@ -690,7 +766,7 @@ impl Parser {
     }
 
     // 3. 找到 空白字符和结构字符，需要 SIMD
-    fn find_whitespace_and_structurals(&mut self, whitespace: &mut u64, structurals: &mut u64) {
+    fn find_whitespace_and_structurals(&mut self, v0: &m256i, v1: &m256i, whitespace: &mut u64, structurals: &mut u64) {
         /**
         match self.tag {
             0 => unsafe { &mut self.inner.fallback }
@@ -700,7 +776,8 @@ impl Parser {
             _ => unreachable!(),
         }
         */
-        self.inner.find_whitespace_and_structurals(whitespace, structurals)
+
+        find_whitespace_and_structurals(&self.low_nibble_mask, &self.high_nibble_mask, &self.structural_shufti_mask, &self.whitespace_shufti_mask, v0, v1, whitespace, structurals)
     }
 
     // 4. 处理索引结构，不需要 SIMD
@@ -760,7 +837,7 @@ impl Parser {
             _ => unreachable!(),
         }
         */
-        self.inner.index_extract(
+        index_extract(
             structurals,
             idx,
             &mut self.structural_indexes,

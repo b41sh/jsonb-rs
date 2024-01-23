@@ -18,7 +18,8 @@ use std::io::Read;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 
 fn parse_jsonb(data: &[u8]) {
-    let _v: jsonb::Value = jsonb::parse_value(data).unwrap();
+    let v: jsonb::Value = jsonb::parse_value(data).unwrap();
+    let _buf = v.to_vec();
 }
 
 fn parse_new_jsonb(data: &[u8]) {
@@ -58,7 +59,7 @@ fn add_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("jsonb new parse {}", file), |b| {
             b.iter(|| parse_new_jsonb(&bytes))
         });
-
+/**
         c.bench_function(&format!("serde_json parse {}", file), |b| {
             b.iter(|| parse_serde_json(&bytes))
         });
@@ -66,7 +67,7 @@ fn add_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("json_deserializer parse {}", file), |b| {
             b.iter(|| parse_json_deserializer(&bytes))
         });
-
+*/
         let bytes = bytes.clone();
         c.bench_function(&format!("simd_json parse {}", file), move |b| {
             b.iter_batched(
