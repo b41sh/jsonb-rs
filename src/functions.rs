@@ -16,6 +16,7 @@ use core::convert::TryInto;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::str::from_utf8;
 use std::str::from_utf8_unchecked;
@@ -2484,6 +2485,362 @@ fn delete_jsonb_by_index(value: &[u8], index: i32, buf: &mut Vec<u8>) -> Result<
         _ => return Err(Error::InvalidJsonType),
     }
     Ok(())
+}
+
+/// Deletes a value from a JSON object by the specified path,
+/// where path elements can be either field keys or array indexes.
+pub fn insert_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
+    value: &[u8],
+    keypath: I,
+    new_val: &[u8],
+    insert_after: bool,
+    buf: &mut Vec<u8>,
+) -> Result<(), Error> {
+    let keypath: VecDeque<_> = keypath.collect();
+    if !is_jsonb(value) {
+        let value = parse_value(value)?;
+        let mut val_buf = Vec::new();
+        value.write_to_vec(&mut val_buf);
+        if !is_jsonb(new_val) {
+            let new_val = parse_value(new_val)?;
+            let mut new_val_buf = Vec::new();
+            new_val.write_to_vec(&mut new_val_buf);
+            return insert_by_keypath_jsonb(&val_buf, keypath, &new_val_buf, insert_after, buf);
+        }
+        return insert_by_keypath_jsonb(&val_buf, keypath, new_val, insert_after, buf);
+    }
+    insert_by_keypath_jsonb(value, keypath, new_val, insert_after, buf)
+}
+
+fn insert_by_keypath_jsonb<'a>(
+    value: &'a [u8],
+    mut keypath: VecDeque<&'a KeyPath<'a>>,
+    new_val: &'a [u8],
+    insert_after: bool,
+    buf: &mut Vec<u8>,
+) -> Result<(), Error> {
+    let header = read_u32(value, 0)?;
+    match header & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
+            match insert_jsonb_array_by_keypath(value, header, &mut keypath, new_val, insert_after)?
+            {
+                Some(builder) => {
+                    builder.build_into(buf);
+                }
+                None => {
+                    buf.extend_from_slice(value);
+                }
+            };
+        }
+        OBJECT_CONTAINER_TAG => {
+            match insert_jsonb_object_by_keypath(
+                value,
+                header,
+                &mut keypath,
+                new_val,
+                insert_after,
+            )? {
+                Some(builder) => {
+                    builder.build_into(buf);
+                }
+                None => {
+                    buf.extend_from_slice(value);
+                }
+            }
+        }
+        _ => {
+            // cannot set path in scalar
+            return Err(Error::InvalidKeyPath);
+        }
+    }
+    Ok(())
+}
+
+fn insert_jsonb_array_by_keypath<'a>(
+    value: &'a [u8],
+    header: u32,
+    keypath: &mut VecDeque<&'a KeyPath<'a>>,
+    new_val: &'a [u8],
+    insert_after: bool,
+) -> Result<Option<ArrayBuilder<'a>>, Error> {
+    let len = (header & CONTAINER_HEADER_LEN_MASK) as i32;
+    match keypath.pop_front() {
+        Some(KeyPath::Index(idx)) => {
+            let idx = if *idx < 0 { len - idx.abs() } else { *idx };
+            let idx = if idx < 0 {
+                0
+            } else if idx >= len {
+                len
+            } else if insert_after {
+                idx + 1
+            } else {
+                idx
+            } as usize;
+
+            let mut builder = ArrayBuilder::new(len as usize);
+            let len = len as usize;
+            for (i, (jentry, item)) in iterate_array(value, header).enumerate() {
+                if i != idx {
+                    builder.push_raw(jentry.clone(), item);
+                }
+                if i == idx || (idx == len && i == len - 1) {
+                    if !keypath.is_empty() {
+                        match jentry.type_code {
+                            CONTAINER_TAG => {
+                                let item_header = read_u32(item, 0)?;
+                                match item_header & CONTAINER_HEADER_TYPE_MASK {
+                                    ARRAY_CONTAINER_TAG => {
+                                        match insert_jsonb_array_by_keypath(
+                                            item,
+                                            item_header,
+                                            keypath,
+                                            new_val,
+                                            insert_after,
+                                        )? {
+                                            Some(item_builder) => builder.push_array(item_builder),
+                                            None => builder.push_raw(jentry, item),
+                                        }
+                                    }
+                                    OBJECT_CONTAINER_TAG => {
+                                        match insert_jsonb_object_by_keypath(
+                                            item,
+                                            item_header,
+                                            keypath,
+                                            new_val,
+                                            insert_after,
+                                        )? {
+                                            Some(item_builder) => builder.push_object(item_builder),
+                                            None => builder.push_raw(jentry, item),
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            _ => {
+                                return Ok(None);
+                            }
+                        }
+                    } else {
+                        let new_header = read_u32(new_val, 0)?;
+                        match new_header & CONTAINER_HEADER_TYPE_MASK {
+                            ARRAY_CONTAINER_TAG | OBJECT_CONTAINER_TAG => {
+                                let new_len = new_header & CONTAINER_HEADER_LEN_MASK;
+                                let new_jentry = JEntry::make_container_jentry(new_len as usize);
+                                builder.push_raw(new_jentry, new_val);
+                            }
+                            _ => {
+                                let encoded = read_u32(new_val, 4)?;
+                                let new_jentry = JEntry::decode_jentry(encoded);
+                                builder.push_raw(new_jentry, &new_val[8..]);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Some(builder))
+        }
+        Some(KeyPath::QuotedName(_) | KeyPath::Name(_)) => {
+            // path element at position 1 is not an integer: "z"
+            return Err(Error::InvalidKeyPath);
+        }
+        _ => Ok(None),
+    }
+}
+
+fn insert_jsonb_object_by_keypath<'a>(
+    value: &'a [u8],
+    header: u32,
+    keypath: &mut VecDeque<&'a KeyPath<'a>>,
+    new_val: &'a [u8],
+    insert_after: bool,
+) -> Result<Option<ObjectBuilder<'a>>, Error> {
+    let len = (header & CONTAINER_HEADER_LEN_MASK) as i32;
+    match keypath.pop_front() {
+        Some(KeyPath::QuotedName(name) | KeyPath::Name(name)) => {
+            let len = len as usize;
+            let mut inserted = false;
+            let mut builder = ObjectBuilder::new();
+            for (i, (key, jentry, item)) in iterate_object_entries(value, header).enumerate() {
+                if key.eq(name) {
+                    if !keypath.is_empty() {
+                        inserted = true;
+                        match jentry.type_code {
+                            CONTAINER_TAG => {
+                                let item_header = read_u32(item, 0)?;
+                                match item_header & CONTAINER_HEADER_TYPE_MASK {
+                                    ARRAY_CONTAINER_TAG => {
+                                        match insert_jsonb_array_by_keypath(
+                                            item,
+                                            item_header,
+                                            keypath,
+                                            new_val,
+                                            insert_after,
+                                        )? {
+                                            Some(item_builder) => {
+                                                builder.push_array(key, item_builder)
+                                            }
+                                            None => builder.push_raw(key, jentry, item),
+                                        }
+                                    }
+                                    OBJECT_CONTAINER_TAG => {
+                                        match insert_jsonb_object_by_keypath(
+                                            item,
+                                            item_header,
+                                            keypath,
+                                            new_val,
+                                            insert_after,
+                                        )? {
+                                            Some(item_builder) => {
+                                                builder.push_object(key, item_builder)
+                                            }
+                                            None => builder.push_raw(key, jentry, item),
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            _ => {
+                                return Ok(None);
+                            }
+                        }
+                    } else {
+                        // cannot replace existing key
+                        return Err(Error::InvalidKeyPath);
+                    }
+                } else {
+                    let ord = key.cmp(&name);
+                    if ord == Ordering::Less {
+                        builder.push_raw(key, jentry.clone(), item);
+                    }
+                    if !inserted && (ord == Ordering::Greater || i == len - 1) {
+                        let new_header = read_u32(new_val, 0)?;
+                        match new_header & CONTAINER_HEADER_TYPE_MASK {
+                            ARRAY_CONTAINER_TAG | OBJECT_CONTAINER_TAG => {
+                                let new_len = new_header & CONTAINER_HEADER_LEN_MASK;
+                                let new_jentry = JEntry::make_container_jentry(new_len as usize);
+                                builder.push_raw(&name, new_jentry, new_val);
+                            }
+                            _ => {
+                                let encoded = read_u32(new_val, 4)?;
+                                let new_jentry = JEntry::decode_jentry(encoded);
+                                builder.push_raw(&name, new_jentry, &new_val[8..]);
+                            }
+                        }
+                        inserted = true;
+                    }
+                    if ord == Ordering::Greater {
+                        builder.push_raw(key, jentry, item);
+                    }
+                }
+            }
+            Ok(Some(builder))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Deletes all object fields that have null values from the given JSON value, recursively.
+/// Null values that are not object fields are untouched.
+pub fn dedup(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+    if !is_jsonb(value) {
+        let mut json = parse_value(value)?;
+        dedup_value(&mut json);
+        json.write_to_vec(buf);
+        return Ok(());
+    }
+    dedup_jsonb(value, buf)
+}
+
+fn dedup_value(val: &mut Value<'_>) {
+    match val {
+        Value::Array(arr) => {
+            let mut new_arr = Vec::with_capacity(arr.len());
+            for v in arr {
+                if new_arr.contains(v) {
+                    continue;
+                }
+                dedup_value(v);
+                new_arr.push(v.clone());
+            }
+            *val = Value::Array(new_arr);
+        }
+        Value::Object(ref mut obj) => {
+            for (_, v) in obj.iter_mut() {
+                dedup_value(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn dedup_jsonb(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+    let header = read_u32(value, 0)?;
+
+    match header & CONTAINER_HEADER_TYPE_MASK {
+        OBJECT_CONTAINER_TAG => {
+            let builder = dedup_object(header, value)?;
+            builder.build_into(buf);
+        }
+        ARRAY_CONTAINER_TAG => {
+            let builder = dedup_array(header, value)?;
+            builder.build_into(buf);
+        }
+        _ => buf.extend_from_slice(value),
+    }
+    Ok(())
+}
+
+fn dedup_array(header: u32, value: &[u8]) -> Result<ArrayBuilder<'_>, Error> {
+    let len = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+    let mut builder = ArrayBuilder::new(len);
+
+    let mut set = BTreeSet::new();
+    for (jentry, item) in iterate_array(value, header) {
+        match jentry.type_code {
+            CONTAINER_TAG => {
+                let item_header = read_u32(item, 0)?;
+                match item_header & CONTAINER_HEADER_TYPE_MASK {
+                    OBJECT_CONTAINER_TAG => {
+                        builder.push_object(dedup_object(item_header, item)?);
+                    }
+                    ARRAY_CONTAINER_TAG => {
+                        builder.push_array(dedup_array(item_header, item)?);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                if set.contains(&(jentry.clone(), item)) {
+                    continue;
+                }
+                set.insert((jentry.clone(), item));
+                builder.push_raw(jentry, item)
+            }
+        }
+    }
+    Ok(builder)
+}
+
+fn dedup_object(header: u32, value: &[u8]) -> Result<ObjectBuilder<'_>, Error> {
+    let mut builder = ObjectBuilder::new();
+    for (key, jentry, item) in iterate_object_entries(value, header) {
+        match jentry.type_code {
+            CONTAINER_TAG => {
+                let item_header = read_u32(item, 0)?;
+                match item_header & CONTAINER_HEADER_TYPE_MASK {
+                    OBJECT_CONTAINER_TAG => {
+                        builder.push_object(key, dedup_object(item_header, item)?);
+                    }
+                    ARRAY_CONTAINER_TAG => {
+                        builder.push_array(key, dedup_array(item_header, item)?);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => builder.push_raw(key, jentry, item),
+        }
+    }
+    Ok(builder)
 }
 
 /// Deletes all object fields that have null values from the given JSON value, recursively.
