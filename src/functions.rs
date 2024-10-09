@@ -2487,7 +2487,7 @@ fn delete_jsonb_by_index(value: &[u8], index: i32, buf: &mut Vec<u8>) -> Result<
     Ok(())
 }
 
-/// Deletes a value from a JSON object by the specified path,
+/// Insert a new value into a JSONB value by the specified path,
 /// where path elements can be either field keys or array indexes.
 pub fn insert_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
     value: &[u8],
@@ -2653,7 +2653,7 @@ fn insert_jsonb_array_by_keypath<'a>(
             Ok(Some(builder))
         }
         Some(KeyPath::QuotedName(_) | KeyPath::Name(_)) => {
-            // path element at position 1 is not an integer: "z"
+            // array path index must be an integer.
             return Err(Error::InvalidKeyPath);
         }
         _ => Ok(None),
@@ -2676,12 +2676,22 @@ fn insert_jsonb_object_by_keypath<'a>(
                     if !key.eq(name) {
                         builder.push_raw(key, jentry, item);
                     } else {
-                        if !keypath.is_empty() {
-                            match jentry.type_code {
-                                CONTAINER_TAG => {
-                                    let item_header = read_u32(item, 0)?;
-                                    match item_header & CONTAINER_HEADER_TYPE_MASK {
-                                        ARRAY_CONTAINER_TAG => match insert_jsonb_array_by_keypath(
+                        match jentry.type_code {
+                            CONTAINER_TAG => {
+                                let item_header = read_u32(item, 0)?;
+                                match item_header & CONTAINER_HEADER_TYPE_MASK {
+                                    ARRAY_CONTAINER_TAG => match insert_jsonb_array_by_keypath(
+                                        item,
+                                        item_header,
+                                        keypath,
+                                        new_val,
+                                        insert_after,
+                                    )? {
+                                        Some(item_builder) => builder.push_array(key, item_builder),
+                                        None => builder.push_raw(key, jentry, item),
+                                    },
+                                    OBJECT_CONTAINER_TAG => {
+                                        match insert_jsonb_object_by_keypath(
                                             item,
                                             item_header,
                                             keypath,
@@ -2689,30 +2699,16 @@ fn insert_jsonb_object_by_keypath<'a>(
                                             insert_after,
                                         )? {
                                             Some(item_builder) => {
-                                                builder.push_array(key, item_builder)
+                                                builder.push_object(key, item_builder)
                                             }
                                             None => builder.push_raw(key, jentry, item),
-                                        },
-                                        OBJECT_CONTAINER_TAG => {
-                                            match insert_jsonb_object_by_keypath(
-                                                item,
-                                                item_header,
-                                                keypath,
-                                                new_val,
-                                                insert_after,
-                                            )? {
-                                                Some(item_builder) => {
-                                                    builder.push_object(key, item_builder)
-                                                }
-                                                None => builder.push_raw(key, jentry, item),
-                                            }
                                         }
-                                        _ => unreachable!(),
                                     }
+                                    _ => unreachable!(),
                                 }
-                                _ => {
-                                    return Ok(None);
-                                }
+                            }
+                            _ => {
+                                return Ok(None);
                             }
                         }
                     }
@@ -2767,50 +2763,55 @@ fn insert_jsonb_object_by_keypath<'a>(
     }
 }
 
-/// Deletes all object fields that have null values from the given JSON value, recursively.
-/// Null values that are not object fields are untouched.
-pub fn dedup(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+/// Recursively deletes all duplicate items from an array.
+pub fn array_distinct(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     if !is_jsonb(value) {
         let mut json = parse_value(value)?;
-        dedup_value(&mut json);
+        array_distinct_value(&mut json);
         json.write_to_vec(buf);
         return Ok(());
     }
-    dedup_jsonb(value, buf)
+    array_distinct_jsonb(value, buf)
 }
 
-fn dedup_value(val: &mut Value<'_>) {
+fn array_distinct_value(val: &mut Value<'_>) {
     match val {
         Value::Array(arr) => {
             let mut new_arr = Vec::with_capacity(arr.len());
             for v in arr {
-                if new_arr.contains(v) {
-                    continue;
+                match v {
+                    Value::Array(_) | Value::Object(_) => {
+                        array_distinct_value(v);
+                        new_arr.push(v.clone());
+                    }
+                    _ => {
+                        if !new_arr.contains(v) {
+                            new_arr.push(v.clone());
+                        }
+                    }
                 }
-                dedup_value(v);
-                new_arr.push(v.clone());
             }
             *val = Value::Array(new_arr);
         }
         Value::Object(ref mut obj) => {
             for (_, v) in obj.iter_mut() {
-                dedup_value(v);
+                array_distinct_value(v);
             }
         }
         _ => {}
     }
 }
 
-fn dedup_jsonb(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+fn array_distinct_jsonb(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     let header = read_u32(value, 0)?;
 
     match header & CONTAINER_HEADER_TYPE_MASK {
         OBJECT_CONTAINER_TAG => {
-            let builder = dedup_object(header, value)?;
+            let builder = array_distinct_object(header, value)?;
             builder.build_into(buf);
         }
         ARRAY_CONTAINER_TAG => {
-            let builder = dedup_array(header, value)?;
+            let builder = array_distinct_array(header, value)?;
             builder.build_into(buf);
         }
         _ => buf.extend_from_slice(value),
@@ -2818,7 +2819,7 @@ fn dedup_jsonb(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     Ok(())
 }
 
-fn dedup_array(header: u32, value: &[u8]) -> Result<ArrayBuilder<'_>, Error> {
+fn array_distinct_array(header: u32, value: &[u8]) -> Result<ArrayBuilder<'_>, Error> {
     let len = (header & CONTAINER_HEADER_LEN_MASK) as usize;
     let mut builder = ArrayBuilder::new(len);
 
@@ -2829,10 +2830,10 @@ fn dedup_array(header: u32, value: &[u8]) -> Result<ArrayBuilder<'_>, Error> {
                 let item_header = read_u32(item, 0)?;
                 match item_header & CONTAINER_HEADER_TYPE_MASK {
                     OBJECT_CONTAINER_TAG => {
-                        builder.push_object(dedup_object(item_header, item)?);
+                        builder.push_object(array_distinct_object(item_header, item)?);
                     }
                     ARRAY_CONTAINER_TAG => {
-                        builder.push_array(dedup_array(item_header, item)?);
+                        builder.push_array(array_distinct_array(item_header, item)?);
                     }
                     _ => unreachable!(),
                 }
@@ -2849,7 +2850,7 @@ fn dedup_array(header: u32, value: &[u8]) -> Result<ArrayBuilder<'_>, Error> {
     Ok(builder)
 }
 
-fn dedup_object(header: u32, value: &[u8]) -> Result<ObjectBuilder<'_>, Error> {
+fn array_distinct_object(header: u32, value: &[u8]) -> Result<ObjectBuilder<'_>, Error> {
     let mut builder = ObjectBuilder::new();
     for (key, jentry, item) in iterate_object_entries(value, header) {
         match jentry.type_code {
@@ -2857,10 +2858,10 @@ fn dedup_object(header: u32, value: &[u8]) -> Result<ObjectBuilder<'_>, Error> {
                 let item_header = read_u32(item, 0)?;
                 match item_header & CONTAINER_HEADER_TYPE_MASK {
                     OBJECT_CONTAINER_TAG => {
-                        builder.push_object(key, dedup_object(item_header, item)?);
+                        builder.push_object(key, array_distinct_object(item_header, item)?);
                     }
                     ARRAY_CONTAINER_TAG => {
-                        builder.push_array(key, dedup_array(item_header, item)?);
+                        builder.push_array(key, array_distinct_array(item_header, item)?);
                     }
                     _ => unreachable!(),
                 }
