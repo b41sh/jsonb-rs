@@ -2962,7 +2962,7 @@ fn array_intersection_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> 
         _ => {
             let encoded = read_u32(value1, 4)?;
             let jentry1 = JEntry::decode_jentry(encoded);
-            if item_map.contains_key(&(jentry1.clone(), value1)) {
+            if item_map.contains_key(&(jentry1.clone(), &value1[8..])) {
                 builder.push_raw(jentry1, &value1[8..]);
             }
         }
@@ -3037,7 +3037,7 @@ fn array_except_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result
         _ => {
             let encoded = read_u32(value1, 4)?;
             let jentry1 = JEntry::decode_jentry(encoded);
-            if !item_map.contains_key(&(jentry1.clone(), value1)) {
+            if !item_map.contains_key(&(jentry1.clone(), &value1[8..])) {
                 builder.push_raw(jentry1, &value1[8..]);
             }
         }
