@@ -2764,6 +2764,103 @@ fn insert_jsonb_object_by_keypath<'a>(
 }
 
 /// Recursively deletes all duplicate items from an array.
+pub fn array_insert(
+    value: &[u8],
+    pos: i32,
+    new_value: &[u8],
+    buf: &mut Vec<u8>,
+) -> Result<(), Error> {
+    if !is_jsonb(value) {
+        let value = parse_value(value)?;
+        let mut val_buf = Vec::new();
+        value.write_to_vec(&mut val_buf);
+        if !is_jsonb(new_value) {
+            let new_value = parse_value(new_value)?;
+            let mut new_val_buf = Vec::new();
+            new_value.write_to_vec(&mut new_val_buf);
+            return array_insert_jsonb(&val_buf, pos, &new_val_buf, buf);
+        }
+        return array_insert_jsonb(&val_buf, pos, new_value, buf);
+    }
+    array_insert_jsonb(value, pos, new_value, buf)
+}
+
+fn array_insert_jsonb(
+    value: &[u8],
+    pos: i32,
+    new_value: &[u8],
+    buf: &mut Vec<u8>,
+) -> Result<(), Error> {
+    let header = read_u32(value, 0)?;
+    let len = if header & CONTAINER_HEADER_TYPE_MASK == ARRAY_CONTAINER_TAG {
+        (header & CONTAINER_HEADER_LEN_MASK) as i32
+    } else {
+        1
+    };
+
+    let idx = if pos < 0 { len - pos.abs() } else { pos };
+    let idx = if idx < 0 {
+        0
+    } else if idx > len {
+        len
+    } else {
+        idx
+    } as usize;
+    let len = len as usize;
+
+    let mut items = VecDeque::with_capacity(len);
+    match header & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
+            for (jentry, item) in iterate_array(value, header) {
+                items.push_back((jentry, item));
+            }
+        }
+        OBJECT_CONTAINER_TAG => {
+            let jentry = JEntry::make_container_jentry(value.len());
+            items.push_back((jentry, value));
+        }
+        _ => {
+            let encoded = read_u32(value, 4)?;
+            let jentry = JEntry::decode_jentry(encoded);
+            items.push_back((jentry, &value[8..]));
+        }
+    }
+
+    let mut builder = ArrayBuilder::new(len + 1);
+    if idx > 0 {
+        let mut i = 0;
+        while let Some((jentry, item)) = items.pop_front() {
+            builder.push_raw(jentry, item);
+            i += 1;
+            if i >= idx {
+                break;
+            }
+        }
+    }
+
+    let new_header = read_u32(new_value, 0)?;
+    match new_header & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG | OBJECT_CONTAINER_TAG => {
+            let new_len = new_header & CONTAINER_HEADER_LEN_MASK;
+            let new_jentry = JEntry::make_container_jentry(new_len as usize);
+            builder.push_raw(new_jentry, new_value);
+        }
+        _ => {
+            let encoded = read_u32(new_value, 4)?;
+            let new_jentry = JEntry::decode_jentry(encoded);
+            builder.push_raw(new_jentry, &new_value[8..]);
+        }
+    }
+
+    while let Some((jentry, item)) = items.pop_front() {
+        builder.push_raw(jentry, item);
+    }
+    builder.build_into(buf);
+
+    Ok(())
+}
+
+/// Recursively deletes all duplicate items from an array.
 pub fn array_distinct(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     if !is_jsonb(value) {
         let value = parse_value(value)?;
@@ -2776,8 +2873,7 @@ pub fn array_distinct(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
 
 fn array_distinct_jsonb(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     let header = read_u32(value, 0)?;
-    let len = header & CONTAINER_HEADER_LEN_MASK;
-    let mut builder = ArrayBuilder::new(len as usize);
+    let mut builder = ArrayBuilder::new(0);
     match header & CONTAINER_HEADER_TYPE_MASK {
         ARRAY_CONTAINER_TAG => {
             let mut item_set = BTreeSet::new();
