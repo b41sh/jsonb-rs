@@ -2841,8 +2841,7 @@ fn array_insert_jsonb(
     let new_header = read_u32(new_value, 0)?;
     match new_header & CONTAINER_HEADER_TYPE_MASK {
         ARRAY_CONTAINER_TAG | OBJECT_CONTAINER_TAG => {
-            let new_len = new_header & CONTAINER_HEADER_LEN_MASK;
-            let new_jentry = JEntry::make_container_jentry(new_len as usize);
+            let new_jentry = JEntry::make_container_jentry(new_value.len());
             builder.push_raw(new_jentry, new_value);
         }
         _ => {
