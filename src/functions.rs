@@ -2766,110 +2766,41 @@ fn insert_jsonb_object_by_keypath<'a>(
 /// Recursively deletes all duplicate items from an array.
 pub fn array_distinct(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     if !is_jsonb(value) {
-        let mut json = parse_value(value)?;
-        array_distinct_value(&mut json);
-        json.write_to_vec(buf);
-        return Ok(());
+        let value = parse_value(value)?;
+        let mut val_buf = Vec::new();
+        value.write_to_vec(&mut val_buf);
+        return array_distinct_jsonb(&val_buf, buf);
     }
     array_distinct_jsonb(value, buf)
 }
 
-fn array_distinct_value(val: &mut Value<'_>) {
-    match val {
-        Value::Array(arr) => {
-            let mut new_arr = Vec::with_capacity(arr.len());
-            for v in arr {
-                match v {
-                    Value::Array(_) | Value::Object(_) => {
-                        array_distinct_value(v);
-                        new_arr.push(v.clone());
-                    }
-                    _ => {
-                        if !new_arr.contains(v) {
-                            new_arr.push(v.clone());
-                        }
-                    }
-                }
-            }
-            *val = Value::Array(new_arr);
-        }
-        Value::Object(ref mut obj) => {
-            for (_, v) in obj.iter_mut() {
-                array_distinct_value(v);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn array_distinct_jsonb(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
     let header = read_u32(value, 0)?;
-
+    let len = header & CONTAINER_HEADER_LEN_MASK;
+    let mut builder = ArrayBuilder::new(len as usize);
     match header & CONTAINER_HEADER_TYPE_MASK {
-        OBJECT_CONTAINER_TAG => {
-            let builder = array_distinct_object(header, value)?;
-            builder.build_into(buf);
-        }
         ARRAY_CONTAINER_TAG => {
-            let builder = array_distinct_array(header, value)?;
-            builder.build_into(buf);
+            let mut item_set = BTreeSet::new();
+            for (jentry, item) in iterate_array(value, header) {
+                if !item_set.contains(&(jentry.clone(), item)) {
+                    item_set.insert((jentry.clone(), item));
+                    builder.push_raw(jentry, item);
+                }
+            }
         }
-        _ => buf.extend_from_slice(value),
+        OBJECT_CONTAINER_TAG => {
+            let jentry = JEntry::make_container_jentry(value.len());
+            builder.push_raw(jentry, value);
+        }
+        _ => {
+            let encoded = read_u32(value, 4)?;
+            let jentry = JEntry::decode_jentry(encoded);
+            builder.push_raw(jentry, &value[8..]);
+        }
     }
+    builder.build_into(buf);
+
     Ok(())
-}
-
-fn array_distinct_array(header: u32, value: &[u8]) -> Result<ArrayBuilder<'_>, Error> {
-    let len = (header & CONTAINER_HEADER_LEN_MASK) as usize;
-    let mut builder = ArrayBuilder::new(len);
-
-    let mut set = BTreeSet::new();
-    for (jentry, item) in iterate_array(value, header) {
-        match jentry.type_code {
-            CONTAINER_TAG => {
-                let item_header = read_u32(item, 0)?;
-                match item_header & CONTAINER_HEADER_TYPE_MASK {
-                    OBJECT_CONTAINER_TAG => {
-                        builder.push_object(array_distinct_object(item_header, item)?);
-                    }
-                    ARRAY_CONTAINER_TAG => {
-                        builder.push_array(array_distinct_array(item_header, item)?);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            _ => {
-                if set.contains(&(jentry.clone(), item)) {
-                    continue;
-                }
-                set.insert((jentry.clone(), item));
-                builder.push_raw(jentry, item)
-            }
-        }
-    }
-    Ok(builder)
-}
-
-fn array_distinct_object(header: u32, value: &[u8]) -> Result<ObjectBuilder<'_>, Error> {
-    let mut builder = ObjectBuilder::new();
-    for (key, jentry, item) in iterate_object_entries(value, header) {
-        match jentry.type_code {
-            CONTAINER_TAG => {
-                let item_header = read_u32(item, 0)?;
-                match item_header & CONTAINER_HEADER_TYPE_MASK {
-                    OBJECT_CONTAINER_TAG => {
-                        builder.push_object(key, array_distinct_object(item_header, item)?);
-                    }
-                    ARRAY_CONTAINER_TAG => {
-                        builder.push_array(key, array_distinct_array(item_header, item)?);
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            _ => builder.push_raw(key, jentry, item),
-        }
-    }
-    Ok(builder)
 }
 
 /// Recursively deletes all duplicate items from an array.
@@ -2893,15 +2824,9 @@ fn array_intersection_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> 
     let header1 = read_u32(value1, 0)?;
     let header2 = read_u32(value2, 0)?;
 
-    let mut builder = ArrayBuilder::new(0);
-    match (
-        header1 & CONTAINER_HEADER_TYPE_MASK,
-        header2 & CONTAINER_HEADER_TYPE_MASK,
-    ) {
-        // only intersection if both value are array types.
-        (ARRAY_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
-            let mut item_map = BTreeMap::new();
-            // put items in value2 to a map.
+    let mut item_map = BTreeMap::new();
+    match header2 & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
             for (jentry2, item2) in iterate_array(value2, header2) {
                 if let Some(cnt) = item_map.get_mut(&(jentry2.clone(), item2)) {
                     *cnt += 1;
@@ -2909,6 +2834,21 @@ fn array_intersection_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> 
                     item_map.insert((jentry2, item2), 1);
                 }
             }
+        }
+        OBJECT_CONTAINER_TAG => {
+            let jentry2 = JEntry::make_container_jentry(value2.len());
+            item_map.insert((jentry2, value2), 1);
+        }
+        _ => {
+            let encoded = read_u32(value2, 4)?;
+            let jentry2 = JEntry::decode_jentry(encoded);
+            item_map.insert((jentry2, &value2[8..]), 1);
+        }
+    }
+
+    let mut builder = ArrayBuilder::new(0);
+    match header1 & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
             for (jentry1, item1) in iterate_array(value1, header1) {
                 if let Some(cnt) = item_map.get_mut(&(jentry1.clone(), item1)) {
                     if *cnt > 0 {
@@ -2918,7 +2858,19 @@ fn array_intersection_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> 
                 }
             }
         }
-        (_, _) => {}
+        OBJECT_CONTAINER_TAG => {
+            let jentry1 = JEntry::make_container_jentry(value1.len());
+            if item_map.contains_key(&(jentry1.clone(), value1)) {
+                builder.push_raw(jentry1, value1);
+            }
+        }
+        _ => {
+            let encoded = read_u32(value1, 4)?;
+            let jentry1 = JEntry::decode_jentry(encoded);
+            if item_map.contains_key(&(jentry1.clone(), value1)) {
+                builder.push_raw(jentry1, &value1[8..]);
+            }
+        }
     }
     builder.build_into(buf);
 
@@ -2946,15 +2898,9 @@ fn array_except_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result
     let header1 = read_u32(value1, 0)?;
     let header2 = read_u32(value2, 0)?;
 
-    let mut builder = ArrayBuilder::new(0);
-    match (
-        header1 & CONTAINER_HEADER_TYPE_MASK,
-        header2 & CONTAINER_HEADER_TYPE_MASK,
-    ) {
-        // only intersection if both value are array types.
-        (ARRAY_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
-            let mut item_map = BTreeMap::new();
-            // put items in value2 to a map.
+    let mut item_map = BTreeMap::new();
+    match header2 & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
             for (jentry2, item2) in iterate_array(value2, header2) {
                 if let Some(cnt) = item_map.get_mut(&(jentry2.clone(), item2)) {
                     *cnt += 1;
@@ -2962,6 +2908,21 @@ fn array_except_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result
                     item_map.insert((jentry2, item2), 1);
                 }
             }
+        }
+        OBJECT_CONTAINER_TAG => {
+            let jentry2 = JEntry::make_container_jentry(value2.len());
+            item_map.insert((jentry2, value2), 1);
+        }
+        _ => {
+            let encoded = read_u32(value2, 4)?;
+            let jentry2 = JEntry::decode_jentry(encoded);
+            item_map.insert((jentry2, &value2[8..]), 1);
+        }
+    }
+
+    let mut builder = ArrayBuilder::new(0);
+    match header1 & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
             for (jentry1, item1) in iterate_array(value1, header1) {
                 if let Some(cnt) = item_map.get_mut(&(jentry1.clone(), item1)) {
                     if *cnt > 0 {
@@ -2972,11 +2933,19 @@ fn array_except_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result
                 builder.push_raw(jentry1, item1);
             }
         }
-        (ARRAY_CONTAINER_TAG, _) => {
-            buf.extend_from_slice(value1);
-            return Ok(());
+        OBJECT_CONTAINER_TAG => {
+            let jentry1 = JEntry::make_container_jentry(value1.len());
+            if !item_map.contains_key(&(jentry1.clone(), value1)) {
+                builder.push_raw(jentry1, value1);
+            }
         }
-        (_, _) => {}
+        _ => {
+            let encoded = read_u32(value1, 4)?;
+            let jentry1 = JEntry::decode_jentry(encoded);
+            if !item_map.contains_key(&(jentry1.clone(), value1)) {
+                builder.push_raw(jentry1, &value1[8..]);
+            }
+        }
     }
     builder.build_into(buf);
 
@@ -3004,26 +2973,47 @@ fn array_overlap_jsonb(value1: &[u8], value2: &[u8]) -> Result<bool, Error> {
     let header1 = read_u32(value1, 0)?;
     let header2 = read_u32(value2, 0)?;
 
-    match (
-        header1 & CONTAINER_HEADER_TYPE_MASK,
-        header2 & CONTAINER_HEADER_TYPE_MASK,
-    ) {
-        // only intersection if both value are array types.
-        (ARRAY_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
-            let mut item_set = BTreeSet::new();
-            // put items in value2 to a set.
+    let mut item_set = BTreeSet::new();
+    match header2 & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
             for (jentry2, item2) in iterate_array(value2, header2) {
                 if !item_set.contains(&(jentry2.clone(), item2)) {
                     item_set.insert((jentry2, item2));
                 }
             }
+        }
+        OBJECT_CONTAINER_TAG => {
+            let jentry2 = JEntry::make_container_jentry(value2.len());
+            item_set.insert((jentry2, value2));
+        }
+        _ => {
+            let encoded = read_u32(value2, 4)?;
+            let jentry2 = JEntry::decode_jentry(encoded);
+            item_set.insert((jentry2, &value2[8..]));
+        }
+    }
+
+    match header1 & CONTAINER_HEADER_TYPE_MASK {
+        ARRAY_CONTAINER_TAG => {
             for (jentry1, item1) in iterate_array(value1, header1) {
                 if item_set.contains(&(jentry1, item1)) {
                     return Ok(true);
                 }
             }
         }
-        (_, _) => {}
+        OBJECT_CONTAINER_TAG => {
+            let jentry1 = JEntry::make_container_jentry(value1.len());
+            if item_set.contains(&(jentry1, value1)) {
+                return Ok(true);
+            }
+        }
+        _ => {
+            let encoded = read_u32(value1, 4)?;
+            let jentry1 = JEntry::decode_jentry(encoded);
+            if item_set.contains(&(jentry1, &value1[8..])) {
+                return Ok(true);
+            }
+        }
     }
 
     Ok(false)
