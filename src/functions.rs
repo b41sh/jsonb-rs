@@ -2872,6 +2872,163 @@ fn array_distinct_object(header: u32, value: &[u8]) -> Result<ObjectBuilder<'_>,
     Ok(builder)
 }
 
+/// Recursively deletes all duplicate items from an array.
+pub fn array_intersection(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+    if !is_jsonb(value1) {
+        let value1 = parse_value(value1)?;
+        let mut val_buf1 = Vec::new();
+        value1.write_to_vec(&mut val_buf1);
+        if !is_jsonb(value2) {
+            let value2 = parse_value(value2)?;
+            let mut val_buf2 = Vec::new();
+            value2.write_to_vec(&mut val_buf2);
+            return array_intersection_jsonb(&val_buf1, &val_buf2, buf);
+        }
+        return array_intersection_jsonb(&val_buf1, value2, buf);
+    }
+    array_intersection_jsonb(value1, value2, buf)
+}
+
+fn array_intersection_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+    let header1 = read_u32(value1, 0)?;
+    let header2 = read_u32(value2, 0)?;
+
+    let mut builder = ArrayBuilder::new(0);
+    match (
+        header1 & CONTAINER_HEADER_TYPE_MASK,
+        header2 & CONTAINER_HEADER_TYPE_MASK,
+    ) {
+        // only intersection if both value are array types.
+        (ARRAY_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
+            let mut item_map = BTreeMap::new();
+            // put items in value2 to a map.
+            for (jentry2, item2) in iterate_array(value2, header2) {
+                if let Some(cnt) = item_map.get_mut(&(jentry2.clone(), item2)) {
+                    *cnt += 1;
+                } else {
+                    item_map.insert((jentry2, item2), 1);
+                }
+            }
+            for (jentry1, item1) in iterate_array(value1, header1) {
+                if let Some(cnt) = item_map.get_mut(&(jentry1.clone(), item1)) {
+                    if *cnt > 0 {
+                        *cnt -= 1;
+                        builder.push_raw(jentry1, item1);
+                    }
+                }
+            }
+        }
+        (_, _) => {}
+    }
+    builder.build_into(buf);
+
+    Ok(())
+}
+
+/// Recursively deletes all duplicate items from an array.
+pub fn array_except(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+    if !is_jsonb(value1) {
+        let value1 = parse_value(value1)?;
+        let mut val_buf1 = Vec::new();
+        value1.write_to_vec(&mut val_buf1);
+        if !is_jsonb(value2) {
+            let value2 = parse_value(value2)?;
+            let mut val_buf2 = Vec::new();
+            value2.write_to_vec(&mut val_buf2);
+            return array_except_jsonb(&val_buf1, &val_buf2, buf);
+        }
+        return array_except_jsonb(&val_buf1, value2, buf);
+    }
+    array_except_jsonb(value1, value2, buf)
+}
+
+fn array_except_jsonb(value1: &[u8], value2: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+    let header1 = read_u32(value1, 0)?;
+    let header2 = read_u32(value2, 0)?;
+
+    let mut builder = ArrayBuilder::new(0);
+    match (
+        header1 & CONTAINER_HEADER_TYPE_MASK,
+        header2 & CONTAINER_HEADER_TYPE_MASK,
+    ) {
+        // only intersection if both value are array types.
+        (ARRAY_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
+            let mut item_map = BTreeMap::new();
+            // put items in value2 to a map.
+            for (jentry2, item2) in iterate_array(value2, header2) {
+                if let Some(cnt) = item_map.get_mut(&(jentry2.clone(), item2)) {
+                    *cnt += 1;
+                } else {
+                    item_map.insert((jentry2, item2), 1);
+                }
+            }
+            for (jentry1, item1) in iterate_array(value1, header1) {
+                if let Some(cnt) = item_map.get_mut(&(jentry1.clone(), item1)) {
+                    if *cnt > 0 {
+                        *cnt -= 1;
+                        continue;
+                    }
+                }
+                builder.push_raw(jentry1, item1);
+            }
+        }
+        (ARRAY_CONTAINER_TAG, _) => {
+            buf.extend_from_slice(value1);
+            return Ok(());
+        }
+        (_, _) => {}
+    }
+    builder.build_into(buf);
+
+    Ok(())
+}
+
+/// Recursively deletes all duplicate items from an array.
+pub fn array_overlap(value1: &[u8], value2: &[u8]) -> Result<bool, Error> {
+    if !is_jsonb(value1) {
+        let value1 = parse_value(value1)?;
+        let mut val_buf1 = Vec::new();
+        value1.write_to_vec(&mut val_buf1);
+        if !is_jsonb(value2) {
+            let value2 = parse_value(value2)?;
+            let mut val_buf2 = Vec::new();
+            value2.write_to_vec(&mut val_buf2);
+            return array_overlap_jsonb(&val_buf1, &val_buf2);
+        }
+        return array_overlap_jsonb(&val_buf1, value2);
+    }
+    array_overlap_jsonb(value1, value2)
+}
+
+fn array_overlap_jsonb(value1: &[u8], value2: &[u8]) -> Result<bool, Error> {
+    let header1 = read_u32(value1, 0)?;
+    let header2 = read_u32(value2, 0)?;
+
+    match (
+        header1 & CONTAINER_HEADER_TYPE_MASK,
+        header2 & CONTAINER_HEADER_TYPE_MASK,
+    ) {
+        // only intersection if both value are array types.
+        (ARRAY_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
+            let mut item_set = BTreeSet::new();
+            // put items in value2 to a set.
+            for (jentry2, item2) in iterate_array(value2, header2) {
+                if !item_set.contains(&(jentry2.clone(), item2)) {
+                    item_set.insert((jentry2, item2));
+                }
+            }
+            for (jentry1, item1) in iterate_array(value1, header1) {
+                if item_set.contains(&(jentry1, item1)) {
+                    return Ok(true);
+                }
+            }
+        }
+        (_, _) => {}
+    }
+
+    Ok(false)
+}
+
 /// Deletes all object fields that have null values from the given JSON value, recursively.
 /// Null values that are not object fields are untouched.
 pub fn strip_nulls(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
