@@ -2887,6 +2887,7 @@ fn object_insert_jsonb(
             break;
         } else if new_key > obj_key {
             idx = i + 1;
+        } else {
             break;
         }
     }
