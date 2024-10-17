@@ -2872,21 +2872,21 @@ fn object_insert_jsonb(
 ) -> Result<(), Error> {
     let header = read_u32(value, 0)?;
     if header & CONTAINER_HEADER_TYPE_MASK != OBJECT_CONTAINER_TAG {
-        return Ok(());
+        return Err(Error::InvalidObject);
     }
 
     let mut idx = 0;
-    let mut matched = false;
+    let mut duplicate_key = false;
     for (i, obj_key) in iteate_object_keys(value, header).enumerate() {
         if new_key.eq(obj_key) {
             if !update_flag {
-                return Ok(());
+                return Err(Error::ObjectDuplicateKey);
             }
             idx = i;
-            matched = true;
+            duplicate_key = true;
             break;
         } else if new_key > obj_key {
-            idx = i;
+            idx = i + 1;
             break;
         }
     }
@@ -2911,7 +2911,8 @@ fn object_insert_jsonb(
             builder.push_raw(new_key, new_jentry, &new_value[8..]);
         }
     }
-    if matched {
+    // if the key is duplicated, ignore the original key and value.
+    if duplicate_key {
         let _ = obj_iter.next();
     }
     while let Some((key, jentry, item)) = obj_iter.next() {
