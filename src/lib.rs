@@ -76,12 +76,11 @@ pub mod keypath;
 mod lazy_value;
 mod number;
 mod parser;
+mod raw;
 mod ser;
 mod util;
 mod value;
-mod raw;
 
-pub use raw::RawJsonb;
 pub use de::from_slice;
 pub use error::Error;
 #[allow(unused_imports)]
@@ -91,4 +90,5 @@ pub use lazy_value::*;
 pub use number::Number;
 pub use parser::parse_lazy_value;
 pub use parser::parse_value;
+pub use raw::RawJsonb;
 pub use value::*;

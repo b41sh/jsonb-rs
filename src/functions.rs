@@ -46,7 +46,6 @@ use rand::Rng;
 
 use crate::RawJsonb;
 
-
 // builtin functions for `JSONB` bytes and `JSON` strings without decode all Values.
 // The input value must be valid `JSONB' or `JSON`.
 
@@ -140,7 +139,6 @@ pub fn build_object<'a, K: AsRef<str>>(
     Ok(())
 }
 
-
 impl<B: AsRef<[u8]>> RawJsonb<B> {
     /// Get the length of `JSONB` array.
     pub fn array_length(&self) -> Result<Option<usize>, Error> {
@@ -162,8 +160,97 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     pub fn contains(&self, other: &RawJsonb<B>) -> Result<bool, Error> {
         let left = self.0.as_ref();
         let right = other.0.as_ref();
-        contains_jsonb(left, right)
+        Self::containter_contains(left, right)
     }
+
+fn containter_contains(left: &[u8], right: &[u8]) -> Result<bool, Error> {
+    let l_header = read_u32(left, 0)?;
+    let r_header = read_u32(right, 0)?;
+
+    let l_type = l_header & CONTAINER_HEADER_TYPE_MASK;
+    let r_type = r_header & CONTAINER_HEADER_TYPE_MASK;
+
+    // special case for the left array and the right scalar
+    if l_type == ARRAY_CONTAINER_TAG && r_type == SCALAR_CONTAINER_TAG {
+        let r_jentry = JEntry::decode_jentry(read_u32(right, 4)?);
+        return Ok(Self::array_contains(left, l_header, &right[8..], r_jentry));
+    }
+
+    if l_type != r_type {
+        return Ok(false);
+    }
+
+    match r_type {
+        OBJECT_CONTAINER_TAG => {
+            let l_size = l_header & CONTAINER_HEADER_LEN_MASK;
+            let r_size = r_header & CONTAINER_HEADER_LEN_MASK;
+            if l_size < r_size {
+                return Ok(false);
+            }
+            for (r_key, r_jentry, r_val) in iterate_object_entries(right, r_header) {
+                match get_jentry_by_name(left, 0, l_header, r_key, false) {
+                    Some((l_jentry, _, l_val_offset)) => {
+                        if l_jentry.type_code != r_jentry.type_code {
+                            return Ok(false);
+                        }
+                        let l_val = &left[l_val_offset..l_val_offset + l_jentry.length as usize];
+                        if r_jentry.type_code != CONTAINER_TAG {
+                            if !l_val.eq(r_val) {
+                                return Ok(false);
+                            }
+                        } else if !Self::containter_contains(l_val, r_val)? {
+                            return Ok(false);
+                        }
+                    }
+                    None => return Ok(false),
+                }
+            }
+            Ok(true)
+        }
+        ARRAY_CONTAINER_TAG => {
+            for (r_jentry, r_val) in iterate_array(right, r_header) {
+                if r_jentry.type_code != CONTAINER_TAG {
+                    if !Self::array_contains(left, l_header, r_val, r_jentry) {
+                        return Ok(false);
+                    }
+                } else {
+                    let l_nested: Vec<_> = iterate_array(left, l_header)
+                        .filter(|(l_jentry, _)| l_jentry.type_code == CONTAINER_TAG)
+                        .map(|(_, l_val)| l_val)
+                        .collect();
+
+                    let mut contains_nested = false;
+
+                    for l_nested_val in l_nested {
+                        if Self::containter_contains(l_nested_val, r_val)? {
+                            contains_nested = true;
+                            break;
+                        }
+                    }
+                    if !contains_nested {
+                        return Ok(false);
+                    }
+                }
+            }
+            Ok(true)
+        }
+        _ => Ok(left.eq(right)),
+    }
+}
+
+fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -> bool {
+    for (jentry, arr_val) in iterate_array(arr, arr_header) {
+        if jentry.type_code != val_jentry.type_code {
+            continue;
+        }
+        if val.eq(arr_val) {
+            return true;
+        }
+    }
+    false
+}
+
+
 
     /// Get the keys of a `JSONB` object.
     pub fn object_keys(&self) -> Result<Option<Vec<u8>>, Error> {
@@ -197,7 +284,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 Ok(Some(buf))
             }
             ARRAY_CONTAINER_TAG | SCALAR_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -237,7 +324,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 Ok(Some(items))
             }
             ARRAY_CONTAINER_TAG | SCALAR_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -263,7 +350,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 Ok(Some(items))
             }
             OBJECT_CONTAINER_TAG | SCALAR_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -309,7 +396,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 }
             }
             OBJECT_CONTAINER_TAG | ARRAY_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -332,7 +419,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 }
             }
             OBJECT_CONTAINER_TAG | ARRAY_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -373,7 +460,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 }
             }
             OBJECT_CONTAINER_TAG | ARRAY_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -485,7 +572,9 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 match jentry.type_code {
                     STRING_TAG => {
                         let length = jentry.length as usize;
-                        let s = unsafe { std::str::from_utf8_unchecked(&self.0.as_ref()[8..8 + length]) };
+                        let s = unsafe {
+                            std::str::from_utf8_unchecked(&self.0.as_ref()[8..8 + length])
+                        };
                         Ok(Some(Cow::Borrowed(s)))
                     }
                     NULL_TAG | NUMBER_TAG | FALSE_TAG | TRUE_TAG | CONTAINER_TAG => Ok(None),
@@ -493,7 +582,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 }
             }
             OBJECT_CONTAINER_TAG | ARRAY_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -536,21 +625,115 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     /// Convert `JSONB` value to `serde_json` Value
     pub fn to_serde_json(&self) -> Result<serde_json::Value, Error> {
         let value = self.0.as_ref();
-        containter_to_serde_json(value)
+        Self::containter_to_serde_json(value)
     }
 
     /// Convert `JSONB` value to `serde_json` Object Value
-    pub fn to_serde_json_object(&self) -> Result<Option<serde_json::Map<String, serde_json::Value>>, Error> {
+    pub fn to_serde_json_object(
+        &self,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, Error> {
         let value = self.0.as_ref();
-        containter_to_serde_json_object(value)
+        Self::containter_to_serde_json_object(value)
     }
 
+    fn containter_to_serde_json_object(
+        value: &[u8],
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, Error> {
+        let header = read_u32(value, 0).unwrap_or_default();
+        let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+
+        let obj_value = match header & CONTAINER_HEADER_TYPE_MASK {
+            OBJECT_CONTAINER_TAG => {
+                let mut obj = serde_json::Map::with_capacity(length);
+                for (key, jentry, val) in iterate_object_entries(value, header) {
+                    let item = Self::scalar_to_serde_json(jentry, val)?;
+                    obj.insert(key.to_string(), item);
+                }
+                Some(obj)
+            }
+            ARRAY_CONTAINER_TAG | SCALAR_CONTAINER_TAG => None,
+            _ => {
+                return Err(Error::InvalidJsonb);
+            }
+        };
+        Ok(obj_value)
+    }
+
+    fn containter_to_serde_json(value: &[u8]) -> Result<serde_json::Value, Error> {
+        let header = read_u32(value, 0).unwrap_or_default();
+        let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+
+        let json_value = match header & CONTAINER_HEADER_TYPE_MASK {
+            OBJECT_CONTAINER_TAG => {
+                let mut obj = serde_json::Map::with_capacity(length);
+                for (key, jentry, val) in iterate_object_entries(value, header) {
+                    let item = Self::scalar_to_serde_json(jentry, val)?;
+                    obj.insert(key.to_string(), item);
+                }
+                serde_json::Value::Object(obj)
+            }
+            ARRAY_CONTAINER_TAG => {
+                let mut arr = Vec::with_capacity(length);
+                for (jentry, val) in iterate_array(value, header) {
+                    let item = Self::scalar_to_serde_json(jentry, val)?;
+                    arr.push(item);
+                }
+                serde_json::Value::Array(arr)
+            }
+            SCALAR_CONTAINER_TAG => {
+                let encoded = match read_u32(value, 4) {
+                    Ok(encoded) => encoded,
+                    Err(_) => {
+                        return Err(Error::InvalidJsonb);
+                    }
+                };
+                let jentry = JEntry::decode_jentry(encoded);
+                Self::scalar_to_serde_json(jentry, &value[8..])?
+            }
+            _ => {
+                return Err(Error::InvalidJsonb);
+            }
+        };
+        Ok(json_value)
+    }
+
+    fn scalar_to_serde_json(jentry: JEntry, value: &[u8]) -> Result<serde_json::Value, Error> {
+        let json_value = match jentry.type_code {
+            NULL_TAG => serde_json::Value::Null,
+            TRUE_TAG => serde_json::Value::Bool(true),
+            FALSE_TAG => serde_json::Value::Bool(false),
+            NUMBER_TAG => {
+                let len = jentry.length as usize;
+                let n = Number::decode(&value[..len])?;
+                match n {
+                    Number::Int64(v) => serde_json::Value::Number(serde_json::Number::from(v)),
+                    Number::UInt64(v) => serde_json::Value::Number(serde_json::Number::from(v)),
+                    Number::Float64(v) => match serde_json::Number::from_f64(v) {
+                        Some(v) => serde_json::Value::Number(v),
+                        None => {
+                            return Err(Error::InvalidJson);
+                        }
+                    },
+                }
+            }
+            STRING_TAG => {
+                let len = jentry.length as usize;
+                let s = unsafe { String::from_utf8_unchecked(value[..len].to_vec()) };
+                serde_json::Value::String(s)
+            }
+            CONTAINER_TAG => Self::containter_to_serde_json(value)?,
+            _ => {
+                return Err(Error::InvalidJsonb);
+            }
+        };
+        Ok(json_value)
+    }
 
     /// Convert `JSONB` value to String
     pub fn to_string(&self) -> String {
         let value = self.0.as_ref();
         let mut json = String::with_capacity(value.len());
-        if container_to_string(value, &mut 0, &mut json, &PrettyOpts::new(false)).is_err() {
+        if Self::container_to_string(value, &mut 0, &mut json, &PrettyOpts::new(false)).is_err() {
             json.clear();
             // Compatible with text json data
             match parse_value(value) {
@@ -569,14 +752,21 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     pub fn to_pretty_string(&self) -> String {
         let value = self.0.as_ref();
         let mut json = String::with_capacity(value.len());
-        if container_to_string(value, &mut 0, &mut json, &PrettyOpts::new(true)).is_err() {
+        if Self::container_to_string(value, &mut 0, &mut json, &PrettyOpts::new(true)).is_err() {
             json.clear();
             // Compatible with text json data
             match parse_value(value) {
                 Ok(val) => {
                     let mut buf = Vec::with_capacity(value.len());
                     val.write_to_vec(&mut buf);
-                    if container_to_string(buf.as_ref(), &mut 0, &mut json, &PrettyOpts::new(true)).is_err() {
+                    if Self::container_to_string(
+                        buf.as_ref(),
+                        &mut 0,
+                        &mut json,
+                        &PrettyOpts::new(true),
+                    )
+                    .is_err()
+                    {
                         json.clear();
                         json.push_str("null");
                     }
@@ -587,6 +777,180 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
             }
         }
         json
+    }
+
+    fn container_to_string(
+        value: &[u8],
+        offset: &mut usize,
+        json: &mut String,
+        pretty_opts: &PrettyOpts,
+    ) -> Result<(), Error> {
+        let header = read_u32(value, *offset)?;
+        match header & CONTAINER_HEADER_TYPE_MASK {
+            SCALAR_CONTAINER_TAG => {
+                let mut jentry_offset = 4 + *offset;
+                let mut value_offset = 8 + *offset;
+                Self::scalar_to_string(
+                    value,
+                    &mut jentry_offset,
+                    &mut value_offset,
+                    json,
+                    pretty_opts,
+                )?;
+            }
+            ARRAY_CONTAINER_TAG => {
+                if pretty_opts.enabled {
+                    json.push_str("[\n");
+                } else {
+                    json.push('[');
+                }
+                let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+                let mut jentry_offset = 4 + *offset;
+                let mut value_offset = 4 + *offset + 4 * length;
+                let inner_pretty_ops = pretty_opts.inc_indent();
+                for i in 0..length {
+                    if i > 0 {
+                        if pretty_opts.enabled {
+                            json.push_str(",\n");
+                        } else {
+                            json.push(',');
+                        }
+                    }
+                    if pretty_opts.enabled {
+                        json.push_str(&inner_pretty_ops.generate_indent());
+                    }
+                    Self::scalar_to_string(
+                        value,
+                        &mut jentry_offset,
+                        &mut value_offset,
+                        json,
+                        &inner_pretty_ops,
+                    )?;
+                }
+                if pretty_opts.enabled {
+                    json.push('\n');
+                    json.push_str(&pretty_opts.generate_indent());
+                }
+                json.push(']');
+            }
+            OBJECT_CONTAINER_TAG => {
+                if pretty_opts.enabled {
+                    json.push_str("{\n");
+                } else {
+                    json.push('{');
+                }
+                let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+                let mut jentry_offset = 4 + *offset;
+                let mut key_offset = 4 + *offset + 8 * length;
+                let mut keys = VecDeque::with_capacity(length);
+                for _ in 0..length {
+                    let jentry_encoded = read_u32(value, jentry_offset)?;
+                    let jentry = JEntry::decode_jentry(jentry_encoded);
+                    let key_length = jentry.length as usize;
+                    keys.push_back((key_offset, key_offset + key_length));
+                    jentry_offset += 4;
+                    key_offset += key_length;
+                }
+                let mut value_offset = key_offset;
+                let inner_pretty_ops = pretty_opts.inc_indent();
+                for i in 0..length {
+                    if i > 0 {
+                        if pretty_opts.enabled {
+                            json.push_str(",\n");
+                        } else {
+                            json.push(',');
+                        }
+                    }
+                    let (key_start, key_end) = keys.pop_front().unwrap();
+                    if pretty_opts.enabled {
+                        json.push_str(&inner_pretty_ops.generate_indent());
+                        Self::escape_scalar_string(value, key_start, key_end, json);
+                        json.push_str(": ");
+                    } else {
+                        Self::escape_scalar_string(value, key_start, key_end, json);
+                        json.push(':');
+                    }
+                    Self::scalar_to_string(
+                        value,
+                        &mut jentry_offset,
+                        &mut value_offset,
+                        json,
+                        &inner_pretty_ops,
+                    )?;
+                }
+                if pretty_opts.enabled {
+                    json.push('\n');
+                    json.push_str(&pretty_opts.generate_indent());
+                }
+                json.push('}');
+            }
+            _ => {
+                return Err(Error::InvalidJsonb);
+            }
+        }
+        Ok(())
+    }
+
+    fn scalar_to_string(
+        value: &[u8],
+        jentry_offset: &mut usize,
+        value_offset: &mut usize,
+        json: &mut String,
+        pretty_opts: &PrettyOpts,
+    ) -> Result<(), Error> {
+        let jentry_encoded = read_u32(value, *jentry_offset)?;
+        let jentry = JEntry::decode_jentry(jentry_encoded);
+        let length = jentry.length as usize;
+        match jentry.type_code {
+            NULL_TAG => json.push_str("null"),
+            TRUE_TAG => json.push_str("true"),
+            FALSE_TAG => json.push_str("false"),
+            NUMBER_TAG => {
+                let num = Number::decode(&value[*value_offset..*value_offset + length])?;
+                json.push_str(&num.to_string());
+            }
+            STRING_TAG => {
+                Self::escape_scalar_string(value, *value_offset, *value_offset + length, json);
+            }
+            CONTAINER_TAG => {
+                Self::container_to_string(value, value_offset, json, pretty_opts)?;
+            }
+            _ => {}
+        }
+        *jentry_offset += 4;
+        *value_offset += length;
+        Ok(())
+    }
+
+    fn escape_scalar_string(value: &[u8], start: usize, end: usize, json: &mut String) {
+        json.push('\"');
+        let mut last_start = start;
+        for i in start..end {
+            // add backslash for escaped characters.
+            let c = match value[i] {
+                0x5C => "\\\\",
+                0x22 => "\\\"",
+                0x08 => "\\b",
+                0x0C => "\\f",
+                0x0A => "\\n",
+                0x0D => "\\r",
+                0x09 => "\\t",
+                _ => {
+                    continue;
+                }
+            };
+            if i > last_start {
+                let val = String::from_utf8_lossy(&value[last_start..i]);
+                json.push_str(&val);
+            }
+            json.push_str(c);
+            last_start = i + 1;
+        }
+        if last_start < end {
+            let val = String::from_utf8_lossy(&value[last_start..end]);
+            json.push_str(&val);
+        }
+        json.push('\"');
     }
 
     /// Traverse all the string fields in a jsonb value and check whether the conditions are met.
@@ -630,6 +994,74 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
             }
         }
         Ok(false)
+    }
+
+    /// Checks whether all of the strings exist as top-level keys or array elements.
+    pub fn exists_all_keys<'a, I: Iterator<Item = &'a [u8]>>(&self, keys: I) -> Result<bool, Error> {
+        let value = self.0.as_ref();
+        let header = read_u32(value, 0)?;
+
+        for key in keys {
+            match from_utf8(key) {
+                Ok(key) => {
+                    if !Self::exists_key(value, header, key)? {
+                        return Ok(false);
+                    }
+                }
+                Err(_) => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    /// Checks whether any of the strings exist as top-level keys or array elements.
+    pub fn exists_any_keys<'a, I: Iterator<Item = &'a [u8]>>(&self, keys: I) -> Result<bool, Error> {
+        let value = self.0.as_ref();
+        let header = read_u32(value, 0)?;
+
+        for key in keys {
+            if let Ok(key) = from_utf8(key) {
+                if Self::exists_key(value, header, key)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    fn exists_key(value: &[u8], header: u32, key: &str) -> Result<bool, Error> {
+        match header & CONTAINER_HEADER_TYPE_MASK {
+            OBJECT_CONTAINER_TAG => {
+                let mut matches = false;
+                for obj_key in iteate_object_keys(value, header) {
+                    if obj_key.eq(key) {
+                        matches = true;
+                        break;
+                    }
+                }
+                Ok(matches)
+            }
+            ARRAY_CONTAINER_TAG => {
+                let mut matches = false;
+                for (jentry, val) in iterate_array(value, header) {
+                    if jentry.type_code != STRING_TAG {
+                        continue;
+                    }
+                    let val = unsafe { from_utf8_unchecked(val) };
+                    if val.eq(key) {
+                        matches = true;
+                        break;
+                    }
+                }
+                Ok(matches)
+            }
+            SCALAR_CONTAINER_TAG => {
+                Ok(false)
+            }
+            _ => {
+                Err(Error::InvalidJsonb)
+            }
+        }
     }
 
     /// Concatenates two jsonb values. Concatenating two arrays generates an array containing all the elements of each input.
@@ -742,11 +1174,11 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
 
         match header & CONTAINER_HEADER_TYPE_MASK {
             OBJECT_CONTAINER_TAG => {
-                let builder = self.strip_nulls_object(header, value)?;
+                let builder = Self::strip_nulls_object(header, value)?;
                 builder.build_into(buf);
             }
             ARRAY_CONTAINER_TAG => {
-                let builder = self.strip_nulls_array(header, value)?;
+                let builder = Self::strip_nulls_array(header, value)?;
                 builder.build_into(buf);
             }
             SCALAR_CONTAINER_TAG => buf.extend_from_slice(value),
@@ -757,7 +1189,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(())
     }
 
-    fn strip_nulls_array<'a>(&'a self, header: u32, value: &'a [u8]) -> Result<ArrayBuilder<'a>, Error> {
+    fn strip_nulls_array<'a>(header: u32, value: &'a [u8]) -> Result<ArrayBuilder<'a>, Error> {
         let len = (header & CONTAINER_HEADER_LEN_MASK) as usize;
         let mut builder = ArrayBuilder::new(len);
 
@@ -767,10 +1199,10 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                     let item_header = read_u32(item, 0)?;
                     match item_header & CONTAINER_HEADER_TYPE_MASK {
                         OBJECT_CONTAINER_TAG => {
-                            builder.push_object(self.strip_nulls_object(item_header, item)?);
+                            builder.push_object(Self::strip_nulls_object(item_header, item)?);
                         }
                         ARRAY_CONTAINER_TAG => {
-                            builder.push_array(self.strip_nulls_array(item_header, item)?);
+                            builder.push_array(Self::strip_nulls_array(item_header, item)?);
                         }
                         _ => {
                             return Err(Error::InvalidJsonb);
@@ -788,7 +1220,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(builder)
     }
 
-    fn strip_nulls_object<'a>(&'a self, header: u32, value: &'a [u8]) -> Result<ObjectBuilder<'a>, Error> {
+    fn strip_nulls_object<'a>(header: u32, value: &'a [u8]) -> Result<ObjectBuilder<'a>, Error> {
         let mut builder = ObjectBuilder::new();
         for (key, jentry, item) in iterate_object_entries(value, header) {
             match jentry.type_code {
@@ -796,10 +1228,10 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                     let item_header = read_u32(item, 0)?;
                     match item_header & CONTAINER_HEADER_TYPE_MASK {
                         OBJECT_CONTAINER_TAG => {
-                            builder.push_object(key, self.strip_nulls_object(item_header, item)?);
+                            builder.push_object(key, Self::strip_nulls_object(item_header, item)?);
                         }
                         ARRAY_CONTAINER_TAG => {
-                            builder.push_array(key, self.strip_nulls_array(item_header, item)?);
+                            builder.push_array(key, Self::strip_nulls_array(item_header, item)?);
                         }
                         _ => {
                             return Err(Error::InvalidJsonb);
@@ -867,7 +1299,8 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 if index < 0 || index >= len {
                     buf.extend_from_slice(value);
                 } else {
-                    let mut builder = ArrayBuilder::new((header & CONTAINER_HEADER_LEN_MASK) as usize);
+                    let mut builder =
+                        ArrayBuilder::new((header & CONTAINER_HEADER_LEN_MASK) as usize);
                     let index = index as usize;
                     for (i, entry) in iterate_array(value, header).enumerate() {
                         if i != index {
@@ -884,18 +1317,11 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     }
 
     /// Insert a new value into a JSONB array value by the specified position.
-    pub fn array_insert(
-        &self,
-        pos: i32,
-        new_value: &[u8],
-        buf: &mut Vec<u8>,
-    ) -> Result<(), Error> {
+    pub fn array_insert(&self, pos: i32, new_value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
         let len = match header & CONTAINER_HEADER_TYPE_MASK {
-            ARRAY_CONTAINER_TAG => {
-                (header & CONTAINER_HEADER_LEN_MASK) as i32
-            }
+            ARRAY_CONTAINER_TAG => (header & CONTAINER_HEADER_LEN_MASK) as i32,
             SCALAR_CONTAINER_TAG | OBJECT_CONTAINER_TAG => 1,
             _ => {
                 return Err(Error::InvalidJsonb);
@@ -1319,43 +1745,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
 
         Ok(())
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }
-
-
-
-
 
 /// Checks whether the JSON path returns any item for the `JSONB` value.
 pub fn path_exists<'a>(value: &'a [u8], json_path: JsonPath<'a>) -> Result<bool, Error> {
@@ -1590,269 +1980,6 @@ pub fn get_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
     }
     curr_jentry
         .map(|jentry| extract_by_jentry(&jentry, curr_jentry_encoded, curr_val_offset, value))
-}
-
-/// Checks whether all of the strings exist as top-level keys or array elements.
-pub fn exists_all_keys<'a, I: Iterator<Item = &'a [u8]>>(value: &[u8], keys: I) -> bool {
-    if !is_jsonb(value) {
-        match parse_value(value) {
-            Ok(val) => {
-                for key in keys {
-                    match from_utf8(key) {
-                        Ok(key) => {
-                            if !exists_value_key(&val, key) {
-                                return false;
-                            }
-                        }
-                        Err(_) => return false,
-                    }
-                }
-            }
-            Err(_) => return false,
-        };
-        return true;
-    }
-
-    let header = read_u32(value, 0).unwrap_or_default();
-
-    for key in keys {
-        match from_utf8(key) {
-            Ok(key) => {
-                if !exists_jsonb_key(value, header, key) {
-                    return false;
-                }
-            }
-            Err(_) => return false,
-        }
-    }
-    true
-}
-
-/// Checks whether any of the strings exist as top-level keys or array elements.
-pub fn exists_any_keys<'a, I: Iterator<Item = &'a [u8]>>(value: &[u8], keys: I) -> bool {
-    if !is_jsonb(value) {
-        if let Ok(val) = parse_value(value) {
-            for key in keys {
-                if let Ok(key) = from_utf8(key) {
-                    if exists_value_key(&val, key) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    let header = read_u32(value, 0).unwrap_or_default();
-
-    for key in keys {
-        if let Ok(key) = from_utf8(key) {
-            if exists_jsonb_key(value, header, key) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn exists_value_key(value: &Value, key: &str) -> bool {
-    match value {
-        Value::Array(arr) => {
-            let mut found = false;
-            for item in arr {
-                let matches = match item {
-                    Value::String(v) => key.eq(v),
-                    _ => false,
-                };
-                if matches {
-                    found = true;
-                    break;
-                }
-            }
-            found
-        }
-        Value::Object(obj) => obj.contains_key(key),
-        _ => false,
-    }
-}
-
-fn exists_jsonb_key(value: &[u8], header: u32, key: &str) -> bool {
-    match header & CONTAINER_HEADER_TYPE_MASK {
-        OBJECT_CONTAINER_TAG => {
-            let mut matches = false;
-            for obj_key in iteate_object_keys(value, header) {
-                if obj_key.eq(key) {
-                    matches = true;
-                    break;
-                }
-            }
-            matches
-        }
-        ARRAY_CONTAINER_TAG => {
-            let mut matches = false;
-            for (jentry, val) in iterate_array(value, header) {
-                if jentry.type_code != STRING_TAG {
-                    continue;
-                }
-                let val = unsafe { from_utf8_unchecked(val) };
-                if val.eq(key) {
-                    matches = true;
-                    break;
-                }
-            }
-            matches
-        }
-        _ => false,
-    }
-}
-
-/// Checks whether the right value contains in the left value.
-pub fn contains(left: &[u8], right: &[u8]) -> bool {
-    if !is_jsonb(left) || !is_jsonb(right) {
-        return match (from_slice(left), from_slice(right)) {
-            (Ok(left), Ok(right)) => contains_value(&left, &right),
-            _ => false,
-        };
-    }
-    contains_jsonb(left, right).unwrap_or(false)
-}
-
-fn contains_value(left: &Value, right: &Value) -> bool {
-    // special case for the left array and the right scalar
-    if left.is_array() && right.is_scalar() {
-        return left.as_array().unwrap().contains(right);
-    }
-    if !left.eq_variant(right) {
-        return false;
-    }
-    match right {
-        Value::Object(r_obj) => {
-            let l_obj = left.as_object().unwrap();
-            if l_obj.len() < r_obj.len() {
-                return false;
-            }
-            for (r_key, r_val) in r_obj {
-                match l_obj.get(r_key) {
-                    Some(l_val) => {
-                        if !l_val.eq_variant(r_val) {
-                            return false;
-                        }
-                        if l_val.is_scalar() {
-                            if !l_val.eq(r_val) {
-                                return false;
-                            }
-                        } else if !contains_value(l_val, r_val) {
-                            return false;
-                        }
-                    }
-                    None => return false,
-                };
-            }
-            true
-        }
-        Value::Array(r_arr) => {
-            let l_arr = left.as_array().unwrap();
-            for r_val in r_arr {
-                if r_val.is_scalar() {
-                    if !l_arr.contains(r_val) {
-                        return false;
-                    }
-                } else {
-                    let l_nested: Vec<_> =
-                        l_arr.iter().filter(|l_val| !l_val.is_scalar()).collect();
-
-                    let mut contains_nested = false;
-
-                    for l_nested_val in l_nested {
-                        if contains_value(l_nested_val, r_val) {
-                            contains_nested = true;
-                            break;
-                        }
-                    }
-                    if !contains_nested {
-                        return false;
-                    }
-                }
-            }
-            true
-        }
-        _ => left.eq(right),
-    }
-}
-
-fn contains_jsonb(left: &[u8], right: &[u8]) -> Result<bool, Error> {
-    let l_header = read_u32(left, 0)?;
-    let r_header = read_u32(right, 0)?;
-
-    let l_type = l_header & CONTAINER_HEADER_TYPE_MASK;
-    let r_type = r_header & CONTAINER_HEADER_TYPE_MASK;
-
-    // special case for the left array and the right scalar
-    if l_type == ARRAY_CONTAINER_TAG && r_type == SCALAR_CONTAINER_TAG {
-        let r_jentry = JEntry::decode_jentry(read_u32(right, 4)?);
-        return Ok(array_contains(left, l_header, &right[8..], r_jentry));
-    }
-
-    if l_type != r_type {
-        return Ok(false);
-    }
-
-    match r_type {
-        OBJECT_CONTAINER_TAG => {
-            let l_size = l_header & CONTAINER_HEADER_LEN_MASK;
-            let r_size = r_header & CONTAINER_HEADER_LEN_MASK;
-            if l_size < r_size {
-                return Ok(false);
-            }
-            for (r_key, r_jentry, r_val) in iterate_object_entries(right, r_header) {
-                match get_jentry_by_name(left, 0, l_header, r_key, false) {
-                    Some((l_jentry, _, l_val_offset)) => {
-                        if l_jentry.type_code != r_jentry.type_code {
-                            return Ok(false);
-                        }
-                        let l_val = &left[l_val_offset..l_val_offset + l_jentry.length as usize];
-                        if r_jentry.type_code != CONTAINER_TAG {
-                            if !l_val.eq(r_val) {
-                                return Ok(false);
-                            }
-                        } else if !contains_jsonb(l_val, r_val)? {
-                            return Ok(false);
-                        }
-                    }
-                    None => return Ok(false),
-                }
-            }
-            Ok(true)
-        }
-        ARRAY_CONTAINER_TAG => {
-            for (r_jentry, r_val) in iterate_array(right, r_header) {
-                if r_jentry.type_code != CONTAINER_TAG {
-                    if !array_contains(left, l_header, r_val, r_jentry) {
-                        return Ok(false);
-                    }
-                } else {
-                    let l_nested: Vec<_> = iterate_array(left, l_header)
-                        .filter(|(l_jentry, _)| l_jentry.type_code == CONTAINER_TAG)
-                        .map(|(_, l_val)| l_val)
-                        .collect();
-
-                    let mut contains_nested = false;
-
-                    for l_nested_val in l_nested {
-                        if contains_jsonb(l_nested_val, r_val)? {
-                            contains_nested = true;
-                            break;
-                        }
-                    }
-                    if !contains_nested {
-                        return Ok(false);
-                    }
-                }
-            }
-            Ok(true)
-        }
-        _ => Ok(left.eq(right)),
-    }
 }
 
 fn get_jentry_by_name(
@@ -2233,101 +2360,6 @@ fn compare_object(
     Ok(left_length.cmp(&right_length))
 }
 
-
-fn containter_to_serde_json_object(
-    value: &[u8],
-) -> Result<Option<serde_json::Map<String, serde_json::Value>>, Error> {
-    let header = read_u32(value, 0).unwrap_or_default();
-    let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
-
-    let obj_value = match header & CONTAINER_HEADER_TYPE_MASK {
-        OBJECT_CONTAINER_TAG => {
-            let mut obj = serde_json::Map::with_capacity(length);
-            for (key, jentry, val) in iterate_object_entries(value, header) {
-                let item = scalar_to_serde_json(jentry, val)?;
-                obj.insert(key.to_string(), item);
-            }
-            Some(obj)
-        }
-        ARRAY_CONTAINER_TAG | SCALAR_CONTAINER_TAG => None,
-        _ => {
-            return Err(Error::InvalidJsonb);
-        }
-    };
-    Ok(obj_value)
-}
-
-fn containter_to_serde_json(value: &[u8]) -> Result<serde_json::Value, Error> {
-    let header = read_u32(value, 0).unwrap_or_default();
-    let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
-
-    let json_value = match header & CONTAINER_HEADER_TYPE_MASK {
-        OBJECT_CONTAINER_TAG => {
-            let mut obj = serde_json::Map::with_capacity(length);
-            for (key, jentry, val) in iterate_object_entries(value, header) {
-                let item = scalar_to_serde_json(jentry, val)?;
-                obj.insert(key.to_string(), item);
-            }
-            serde_json::Value::Object(obj)
-        }
-        ARRAY_CONTAINER_TAG => {
-            let mut arr = Vec::with_capacity(length);
-            for (jentry, val) in iterate_array(value, header) {
-                let item = scalar_to_serde_json(jentry, val)?;
-                arr.push(item);
-            }
-            serde_json::Value::Array(arr)
-        }
-        SCALAR_CONTAINER_TAG => {
-            let encoded = match read_u32(value, 4) {
-                Ok(encoded) => encoded,
-                Err(_) => {
-                    return Err(Error::InvalidJsonb);
-                }
-            };
-            let jentry = JEntry::decode_jentry(encoded);
-            scalar_to_serde_json(jentry, &value[8..])?
-        }
-        _ => {
-            return Err(Error::InvalidJsonb);
-        }
-    };
-    Ok(json_value)
-}
-
-fn scalar_to_serde_json(jentry: JEntry, value: &[u8]) -> Result<serde_json::Value, Error> {
-    let json_value = match jentry.type_code {
-        NULL_TAG => serde_json::Value::Null,
-        TRUE_TAG => serde_json::Value::Bool(true),
-        FALSE_TAG => serde_json::Value::Bool(false),
-        NUMBER_TAG => {
-            let len = jentry.length as usize;
-            let n = Number::decode(&value[..len])?;
-            match n {
-                Number::Int64(v) => serde_json::Value::Number(serde_json::Number::from(v)),
-                Number::UInt64(v) => serde_json::Value::Number(serde_json::Number::from(v)),
-                Number::Float64(v) => match serde_json::Number::from_f64(v) {
-                    Some(v) => serde_json::Value::Number(v),
-                    None => {
-                        return Err(Error::InvalidJson);
-                    }
-                },
-            }
-        }
-        STRING_TAG => {
-            let len = jentry.length as usize;
-            let s = unsafe { String::from_utf8_unchecked(value[..len].to_vec()) };
-            serde_json::Value::String(s)
-        }
-        CONTAINER_TAG => containter_to_serde_json(value)?,
-        _ => {
-            return Err(Error::InvalidJsonb);
-        }
-    };
-    Ok(json_value)
-}
-
-
 struct PrettyOpts {
     enabled: bool,
     indent: usize,
@@ -2348,178 +2380,6 @@ impl PrettyOpts {
     fn generate_indent(&self) -> String {
         String::from_utf8(vec![0x20; self.indent]).unwrap()
     }
-}
-
-fn container_to_string(
-    value: &[u8],
-    offset: &mut usize,
-    json: &mut String,
-    pretty_opts: &PrettyOpts,
-) -> Result<(), Error> {
-    let header = read_u32(value, *offset)?;
-    match header & CONTAINER_HEADER_TYPE_MASK {
-        SCALAR_CONTAINER_TAG => {
-            let mut jentry_offset = 4 + *offset;
-            let mut value_offset = 8 + *offset;
-            scalar_to_string(
-                value,
-                &mut jentry_offset,
-                &mut value_offset,
-                json,
-                pretty_opts,
-            )?;
-        }
-        ARRAY_CONTAINER_TAG => {
-            if pretty_opts.enabled {
-                json.push_str("[\n");
-            } else {
-                json.push('[');
-            }
-            let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
-            let mut jentry_offset = 4 + *offset;
-            let mut value_offset = 4 + *offset + 4 * length;
-            let inner_pretty_ops = pretty_opts.inc_indent();
-            for i in 0..length {
-                if i > 0 {
-                    if pretty_opts.enabled {
-                        json.push_str(",\n");
-                    } else {
-                        json.push(',');
-                    }
-                }
-                if pretty_opts.enabled {
-                    json.push_str(&inner_pretty_ops.generate_indent());
-                }
-                scalar_to_string(
-                    value,
-                    &mut jentry_offset,
-                    &mut value_offset,
-                    json,
-                    &inner_pretty_ops,
-                )?;
-            }
-            if pretty_opts.enabled {
-                json.push('\n');
-                json.push_str(&pretty_opts.generate_indent());
-            }
-            json.push(']');
-        }
-        OBJECT_CONTAINER_TAG => {
-            if pretty_opts.enabled {
-                json.push_str("{\n");
-            } else {
-                json.push('{');
-            }
-            let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
-            let mut jentry_offset = 4 + *offset;
-            let mut key_offset = 4 + *offset + 8 * length;
-            let mut keys = VecDeque::with_capacity(length);
-            for _ in 0..length {
-                let jentry_encoded = read_u32(value, jentry_offset)?;
-                let jentry = JEntry::decode_jentry(jentry_encoded);
-                let key_length = jentry.length as usize;
-                keys.push_back((key_offset, key_offset + key_length));
-                jentry_offset += 4;
-                key_offset += key_length;
-            }
-            let mut value_offset = key_offset;
-            let inner_pretty_ops = pretty_opts.inc_indent();
-            for i in 0..length {
-                if i > 0 {
-                    if pretty_opts.enabled {
-                        json.push_str(",\n");
-                    } else {
-                        json.push(',');
-                    }
-                }
-                let (key_start, key_end) = keys.pop_front().unwrap();
-                if pretty_opts.enabled {
-                    json.push_str(&inner_pretty_ops.generate_indent());
-                    escape_scalar_string(value, key_start, key_end, json);
-                    json.push_str(": ");
-                } else {
-                    escape_scalar_string(value, key_start, key_end, json);
-                    json.push(':');
-                }
-                scalar_to_string(
-                    value,
-                    &mut jentry_offset,
-                    &mut value_offset,
-                    json,
-                    &inner_pretty_ops,
-                )?;
-            }
-            if pretty_opts.enabled {
-                json.push('\n');
-                json.push_str(&pretty_opts.generate_indent());
-            }
-            json.push('}');
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn scalar_to_string(
-    value: &[u8],
-    jentry_offset: &mut usize,
-    value_offset: &mut usize,
-    json: &mut String,
-    pretty_opts: &PrettyOpts,
-) -> Result<(), Error> {
-    let jentry_encoded = read_u32(value, *jentry_offset)?;
-    let jentry = JEntry::decode_jentry(jentry_encoded);
-    let length = jentry.length as usize;
-    match jentry.type_code {
-        NULL_TAG => json.push_str("null"),
-        TRUE_TAG => json.push_str("true"),
-        FALSE_TAG => json.push_str("false"),
-        NUMBER_TAG => {
-            let num = Number::decode(&value[*value_offset..*value_offset + length])?;
-            json.push_str(&num.to_string());
-        }
-        STRING_TAG => {
-            escape_scalar_string(value, *value_offset, *value_offset + length, json);
-        }
-        CONTAINER_TAG => {
-            container_to_string(value, value_offset, json, pretty_opts)?;
-        }
-        _ => {}
-    }
-    *jentry_offset += 4;
-    *value_offset += length;
-    Ok(())
-}
-
-fn escape_scalar_string(value: &[u8], start: usize, end: usize, json: &mut String) {
-    json.push('\"');
-    let mut last_start = start;
-    for i in start..end {
-        // add backslash for escaped characters.
-        let c = match value[i] {
-            0x5C => "\\\\",
-            0x22 => "\\\"",
-            0x08 => "\\b",
-            0x0C => "\\f",
-            0x0A => "\\n",
-            0x0D => "\\r",
-            0x09 => "\\t",
-            _ => {
-                continue;
-            }
-        };
-        if i > last_start {
-            let val = String::from_utf8_lossy(&value[last_start..i]);
-            json.push_str(&val);
-        }
-        json.push_str(c);
-        last_start = i + 1;
-    }
-    if last_start < end {
-        let val = String::from_utf8_lossy(&value[last_start..end]);
-        json.push_str(&val);
-    }
-    json.push('\"');
 }
 
 /// Convert `JSONB` value to comparable vector.
@@ -2733,7 +2593,6 @@ fn rand_scalar_value() -> Value<'static> {
     val
 }
 
-
 /// Concatenates two jsonb values. Concatenating two arrays generates an array containing all the elements of each input.
 /// Concatenating two objects generates an object containing the union of their keys, taking the second object's value when there are duplicate keys.
 /// All other cases are treated by converting a non-array input into a single-element array, and then proceeding as for two arrays.
@@ -2775,7 +2634,6 @@ fn concat_values<'a>(left: Value<'a>, right: Value<'a>) -> Value<'a> {
         (left, right) => Value::Array(vec![left, right]),
     }
 }
-
 
 /// Deletes a value from a JSON object by the specified path,
 /// where path elements can be either field keys or array indexes.
@@ -2973,7 +2831,6 @@ fn delete_jsonb_object_by_keypath<'a, 'b>(
     }
 }
 
-
 /// Deletes all object fields that have null values from the given JSON value, recursively.
 /// Null values that are not object fields are untouched.
 pub fn strip_nulls(value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
@@ -3004,7 +2861,6 @@ fn strip_value_nulls(val: &mut Value<'_>) {
     }
 }
 
-
 // Check whether the value is `JSONB` format,
 // for compatibility with previous `JSON` string.
 pub(crate) fn is_jsonb(value: &[u8]) -> bool {
@@ -3023,16 +2879,4 @@ fn read_u32(buf: &[u8], idx: usize) -> Result<u32, Error> {
         .try_into()
         .unwrap();
     Ok(u32::from_be_bytes(bytes))
-}
-
-fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -> bool {
-    for (jentry, arr_val) in iterate_array(arr, arr_header) {
-        if jentry.type_code != val_jentry.type_code {
-            continue;
-        }
-        if val.eq(arr_val) {
-            return true;
-        }
-    }
-    false
 }
