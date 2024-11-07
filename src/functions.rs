@@ -44,6 +44,9 @@ use rand::distributions::DistString;
 use rand::thread_rng;
 use rand::Rng;
 
+use crate::RawJsonb;
+
+
 // builtin functions for `JSONB` bytes and `JSON` strings without decode all Values.
 // The input value must be valid `JSONB' or `JSON`.
 
@@ -136,6 +139,23 @@ pub fn build_object<'a, K: AsRef<str>>(
 
     Ok(())
 }
+
+
+impl<B: AsRef<[u8]>> RawJsonb<B> {
+    pub fn array_length(&self) -> Result<Option<usize>, Error> {
+        let header = read_u32(self.0.as_ref(), 0)?;
+        let len = match header & CONTAINER_HEADER_TYPE_MASK {
+            ARRAY_CONTAINER_TAG => {
+                let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
+                Some(length)
+            }
+            _ => None,
+        };
+        Ok(len)
+    }
+}
+
+
 
 /// Get the length of `JSONB` array.
 pub fn array_length(value: &[u8]) -> Option<usize> {

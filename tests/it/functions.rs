@@ -16,6 +16,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use jsonb::RawJsonb;
 
 use jsonb::{
     array_distinct, array_except, array_insert, array_intersection, array_length, array_overlap,
@@ -136,7 +137,9 @@ fn test_array_length() {
         assert_eq!(res, expect);
         let value = parse_value(s.as_bytes()).unwrap();
         value.write_to_vec(&mut buf);
-        let res = array_length(&buf);
+
+        let raw_jsonb = RawJsonb::new(buf.clone());
+        let res = raw_jsonb.array_length().unwrap();
         assert_eq!(res, expect);
         buf.clear();
     }

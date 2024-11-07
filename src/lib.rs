@@ -79,7 +79,9 @@ mod parser;
 mod ser;
 mod util;
 mod value;
+mod raw;
 
+pub use raw::RawJsonb;
 pub use de::from_slice;
 pub use error::Error;
 #[allow(unused_imports)]
