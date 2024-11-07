@@ -15,7 +15,7 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
 
-use crate::array_length;
+//use crate::array_length;
 use crate::ser::Encoder;
 use crate::Value;
 
@@ -51,13 +51,13 @@ impl<'a> LazyValue<'a> {
     }
 
     // TODO migrate more functions to be methods of LazyValue
-    pub fn array_length(&self) -> Option<usize> {
-        match self {
-            LazyValue::Value(Value::Array(arr)) => Some(arr.len()),
-            LazyValue::Raw(cow) => array_length(cow.as_ref()),
-            _ => None,
-        }
-    }
+    //pub fn array_length(&self) -> Option<usize> {
+    //    match self {
+    //        LazyValue::Value(Value::Array(arr)) => Some(arr.len()),
+    //        LazyValue::Raw(cow) => array_length(cow.as_ref()),
+    //        _ => None,
+    //    }
+    //}
 
     pub fn to_value(&'a self) -> Cow<Value<'a>> {
         match self {
