@@ -953,6 +953,181 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         json.push('\"');
     }
 
+
+
+    /// Checks whether the JSON path returns any item for the `JSONB` value.
+    pub fn path_exists<'a>(&self, json_path: JsonPath<'a>) -> Result<bool, Error> {
+        let value = self.0.as_ref();
+        let selector = Selector::new(json_path, Mode::Mixed);
+        selector.exists(value)
+    }
+
+    /// Returns the result of a JSON path predicate check for the specified `JSONB` value.
+    pub fn path_match<'a>(&self, json_path: JsonPath<'a>) -> Result<bool, Error> {
+        let value = self.0.as_ref();
+        let selector = Selector::new(json_path, Mode::First);
+        selector.predicate_match(value)
+    }
+
+    /// Get the inner elements of `JSONB` value by JSON path.
+    /// The return value may contains multiple matching elements.
+    pub fn get_by_path<'a>(
+        &self,
+        json_path: JsonPath<'a>,
+        data: &mut Vec<u8>,
+        offsets: &mut Vec<u64>,
+    ) -> Result<(), Error> {
+        let value = self.0.as_ref();
+        let selector = Selector::new(json_path, Mode::Mixed);
+        selector.select(value, data, offsets)?;
+        Ok(())
+    }
+
+    /// Get the inner element of `JSONB` value by JSON path.
+    /// If there are multiple matching elements, only the first one is returned
+    pub fn get_by_path_first<'a>(
+        &self,
+        json_path: JsonPath<'a>,
+        data: &mut Vec<u8>,
+        offsets: &mut Vec<u64>,
+    ) -> Result<(), Error> {
+        let value = self.0.as_ref();
+        let selector = Selector::new(json_path, Mode::First);
+        selector.select(value, data, offsets)?;
+        Ok(())
+    }
+
+    /// Get the inner elements of `JSONB` value by JSON path.
+    /// If there are multiple matching elements, return an `JSONB` Array.
+    pub fn get_by_path_array<'a>(
+        &self,
+        json_path: JsonPath<'a>,
+        data: &mut Vec<u8>,
+        offsets: &mut Vec<u64>,
+    ) -> Result<(), Error> {
+        let value = self.0.as_ref();
+        let selector = Selector::new(json_path, Mode::Array);
+        selector.select(value, data, offsets)?;
+        Ok(())
+    }
+
+    /// Get the inner element of `JSONB` Array by index.
+    pub fn get_by_index(&self, index: usize) -> Result<Option<Vec<u8>>, Error> {
+        let value = self.0.as_ref();
+        let header = read_u32(value, 0)?;
+        match header & CONTAINER_HEADER_TYPE_MASK {
+            ARRAY_CONTAINER_TAG => {
+                let val = get_jentry_by_index(value, 0, header, index).map(|(jentry, encoded, val_offset)| {
+                    extract_by_jentry(&jentry, encoded, val_offset, value)
+                });
+                Ok(val)
+            }
+            SCALAR_CONTAINER_TAG | OBJECT_CONTAINER_TAG => Ok(None),
+            _ => Err(Error::InvalidJsonb)
+        }
+    }
+
+    /// Get the inner element of `JSONB` Object by key name,
+    /// if `ignore_case` is true, enables case-insensitive matching.
+    pub fn get_by_name(&self, name: &str, ignore_case: bool) -> Result<Option<Vec<u8>>, Error> {
+        let value = self.0.as_ref();
+        let header = read_u32(value, 0)?;
+        match header & CONTAINER_HEADER_TYPE_MASK {
+            OBJECT_CONTAINER_TAG => {
+                let val = get_jentry_by_name(value, 0, header, name, ignore_case).map(
+                    |(jentry, encoded, val_offset)| extract_by_jentry(&jentry, encoded, val_offset, value),
+                );
+                Ok(val)
+            },
+            SCALAR_CONTAINER_TAG | ARRAY_CONTAINER_TAG => Ok(None),
+            _ => Err(Error::InvalidJsonb)
+        }
+    }
+
+    /// Extracts JSON sub-object at the specified path,
+    /// where path elements can be either field keys or array indexes.
+    pub fn get_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
+        &self,
+        keypaths: I,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        let value = self.0.as_ref();
+
+        let mut curr_val_offset = 0;
+        let mut curr_jentry_encoded = 0;
+        let mut curr_jentry: Option<JEntry> = None;
+
+        for path in keypaths {
+            if let Some(ref jentry) = curr_jentry {
+                if jentry.type_code != CONTAINER_TAG {
+                    return Ok(None);
+                }
+            }
+            let header = read_u32(value, curr_val_offset)?;
+            let length = (header & CONTAINER_HEADER_LEN_MASK) as i32;
+            match (path, header & CONTAINER_HEADER_TYPE_MASK) {
+                (KeyPath::QuotedName(name) | KeyPath::Name(name), OBJECT_CONTAINER_TAG) => {
+                    match get_jentry_by_name(value, curr_val_offset, header, name, false) {
+                        Some((jentry, encoded, value_offset)) => {
+                            curr_jentry_encoded = encoded;
+                            curr_jentry = Some(jentry);
+                            curr_val_offset = value_offset;
+                        }
+                        None => return Ok(None),
+                    };
+                }
+                (KeyPath::Index(idx), ARRAY_CONTAINER_TAG) => {
+                    if *idx > length || length + *idx < 0 {
+                        return Ok(None);
+                    } else {
+                        let idx = if *idx >= 0 {
+                            *idx as usize
+                        } else {
+                            (length + *idx) as usize
+                        };
+                        match get_jentry_by_index(value, curr_val_offset, header, idx) {
+                            Some((jentry, encoded, value_offset)) => {
+                                curr_jentry_encoded = encoded;
+                                curr_jentry = Some(jentry);
+                                curr_val_offset = value_offset;
+                            }
+                            None => return Ok(None),
+                        }
+                    }
+                }
+                (_, _) => return Ok(None),
+            }
+        }
+        // If the key paths is empty, return original value.
+        if curr_val_offset == 0 {
+            return Ok(Some(value.to_vec()));
+        }
+        let val = curr_jentry
+            .map(|jentry| extract_by_jentry(&jentry, curr_jentry_encoded, curr_val_offset, value));
+        Ok(val)
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     /// Traverse all the string fields in a jsonb value and check whether the conditions are met.
     pub fn traverse_check_string(&self, func: impl Fn(&[u8]) -> bool) -> Result<bool, Error> {
         let value = self.0.as_ref();
@@ -1745,241 +1920,6 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
 
         Ok(())
     }
-}
-
-/// Checks whether the JSON path returns any item for the `JSONB` value.
-pub fn path_exists<'a>(value: &'a [u8], json_path: JsonPath<'a>) -> Result<bool, Error> {
-    let selector = Selector::new(json_path, Mode::Mixed);
-    if !is_jsonb(value) {
-        match parse_value(value) {
-            Ok(val) => {
-                let value = val.to_vec();
-                selector.exists(value.as_slice())
-            }
-            Err(_) => Ok(false),
-        }
-    } else {
-        selector.exists(value)
-    }
-}
-
-/// Returns the result of a JSON path predicate check for the specified `JSONB` value.
-pub fn path_match<'a>(value: &'a [u8], json_path: JsonPath<'a>) -> Result<bool, Error> {
-    let selector = Selector::new(json_path, Mode::First);
-    if !is_jsonb(value) {
-        let val = parse_value(value)?;
-        selector.predicate_match(&val.to_vec())
-    } else {
-        selector.predicate_match(value)
-    }
-}
-
-/// Get the inner elements of `JSONB` value by JSON path.
-/// The return value may contains multiple matching elements.
-pub fn get_by_path<'a>(
-    value: &'a [u8],
-    json_path: JsonPath<'a>,
-    data: &mut Vec<u8>,
-    offsets: &mut Vec<u64>,
-) -> Result<(), Error> {
-    let selector = Selector::new(json_path, Mode::Mixed);
-    if !is_jsonb(value) {
-        if let Ok(val) = parse_value(value) {
-            let value = val.to_vec();
-            selector.select(value.as_slice(), data, offsets)?;
-        }
-    } else {
-        selector.select(value, data, offsets)?;
-    }
-    Ok(())
-}
-
-/// Get the inner element of `JSONB` value by JSON path.
-/// If there are multiple matching elements, only the first one is returned
-pub fn get_by_path_first<'a>(
-    value: &'a [u8],
-    json_path: JsonPath<'a>,
-    data: &mut Vec<u8>,
-    offsets: &mut Vec<u64>,
-) -> Result<(), Error> {
-    let selector = Selector::new(json_path, Mode::First);
-    if !is_jsonb(value) {
-        if let Ok(val) = parse_value(value) {
-            let value = val.to_vec();
-            selector.select(value.as_slice(), data, offsets)?;
-        }
-    } else {
-        selector.select(value, data, offsets)?;
-    }
-    Ok(())
-}
-
-/// Get the inner elements of `JSONB` value by JSON path.
-/// If there are multiple matching elements, return an `JSONB` Array.
-pub fn get_by_path_array<'a>(
-    value: &'a [u8],
-    json_path: JsonPath<'a>,
-    data: &mut Vec<u8>,
-    offsets: &mut Vec<u64>,
-) -> Result<(), Error> {
-    let selector = Selector::new(json_path, Mode::Array);
-    if !is_jsonb(value) {
-        if let Ok(val) = parse_value(value) {
-            let value = val.to_vec();
-            selector.select(value.as_slice(), data, offsets)?;
-        }
-    } else {
-        selector.select(value, data, offsets)?;
-    }
-    Ok(())
-}
-
-/// Get the inner element of `JSONB` Array by index.
-pub fn get_by_index(value: &[u8], index: usize) -> Option<Vec<u8>> {
-    if !is_jsonb(value) {
-        return match parse_value(value) {
-            Ok(val) => match val {
-                Value::Array(vals) => vals.get(index).map(|v| v.to_vec()),
-                _ => None,
-            },
-            Err(_) => None,
-        };
-    }
-
-    let header = read_u32(value, 0).ok()?;
-    match header & CONTAINER_HEADER_TYPE_MASK {
-        ARRAY_CONTAINER_TAG => {
-            get_jentry_by_index(value, 0, header, index).map(|(jentry, encoded, val_offset)| {
-                extract_by_jentry(&jentry, encoded, val_offset, value)
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Get the inner element of `JSONB` Object by key name,
-/// if `ignore_case` is true, enables case-insensitive matching.
-pub fn get_by_name(value: &[u8], name: &str, ignore_case: bool) -> Option<Vec<u8>> {
-    if !is_jsonb(value) {
-        return match parse_value(value) {
-            Ok(val) => {
-                if ignore_case {
-                    val.get_by_name_ignore_case(name).map(Value::to_vec)
-                } else {
-                    match val {
-                        Value::Object(obj) => obj.get(name).map(|v| v.to_vec()),
-                        _ => None,
-                    }
-                }
-            }
-            Err(_) => None,
-        };
-    }
-
-    let header = read_u32(value, 0).ok()?;
-    match header & CONTAINER_HEADER_TYPE_MASK {
-        OBJECT_CONTAINER_TAG => get_jentry_by_name(value, 0, header, name, ignore_case).map(
-            |(jentry, encoded, val_offset)| extract_by_jentry(&jentry, encoded, val_offset, value),
-        ),
-        _ => None,
-    }
-}
-
-/// Extracts JSON sub-object at the specified path,
-/// where path elements can be either field keys or array indexes.
-pub fn get_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
-    value: &[u8],
-    keypaths: I,
-) -> Option<Vec<u8>> {
-    if !is_jsonb(value) {
-        return match parse_value(value) {
-            Ok(val) => {
-                let mut current_val = &val;
-                for path in keypaths {
-                    let res = match path {
-                        KeyPath::Index(idx) => match current_val {
-                            Value::Array(arr) => {
-                                let length = arr.len() as i32;
-                                if *idx > length || length + *idx < 0 {
-                                    None
-                                } else {
-                                    let idx = if *idx >= 0 {
-                                        *idx as usize
-                                    } else {
-                                        (length + *idx) as usize
-                                    };
-                                    arr.get(idx)
-                                }
-                            }
-                            _ => None,
-                        },
-                        KeyPath::QuotedName(name) | KeyPath::Name(name) => match current_val {
-                            Value::Object(obj) => obj.get(name.as_ref()),
-                            _ => None,
-                        },
-                    };
-                    match res {
-                        Some(v) => current_val = v,
-                        None => return None,
-                    };
-                }
-                Some(current_val.to_vec())
-            }
-            Err(_) => None,
-        };
-    }
-
-    let mut curr_val_offset = 0;
-    let mut curr_jentry_encoded = 0;
-    let mut curr_jentry: Option<JEntry> = None;
-
-    for path in keypaths {
-        if let Some(ref jentry) = curr_jentry {
-            if jentry.type_code != CONTAINER_TAG {
-                return None;
-            }
-        }
-        let header = read_u32(value, curr_val_offset).ok()?;
-        let length = (header & CONTAINER_HEADER_LEN_MASK) as i32;
-        match (path, header & CONTAINER_HEADER_TYPE_MASK) {
-            (KeyPath::QuotedName(name) | KeyPath::Name(name), OBJECT_CONTAINER_TAG) => {
-                match get_jentry_by_name(value, curr_val_offset, header, name, false) {
-                    Some((jentry, encoded, value_offset)) => {
-                        curr_jentry_encoded = encoded;
-                        curr_jentry = Some(jentry);
-                        curr_val_offset = value_offset;
-                    }
-                    None => return None,
-                };
-            }
-            (KeyPath::Index(idx), ARRAY_CONTAINER_TAG) => {
-                if *idx > length || length + *idx < 0 {
-                    return None;
-                } else {
-                    let idx = if *idx >= 0 {
-                        *idx as usize
-                    } else {
-                        (length + *idx) as usize
-                    };
-                    match get_jentry_by_index(value, curr_val_offset, header, idx) {
-                        Some((jentry, encoded, value_offset)) => {
-                            curr_jentry_encoded = encoded;
-                            curr_jentry = Some(jentry);
-                            curr_val_offset = value_offset;
-                        }
-                        None => return None,
-                    }
-                }
-            }
-            (_, _) => return None,
-        }
-    }
-    // If the key paths is empty, return original value.
-    if curr_val_offset == 0 {
-        return Some(value.to_vec());
-    }
-    curr_jentry
-        .map(|jentry| extract_by_jentry(&jentry, curr_jentry_encoded, curr_val_offset, value))
 }
 
 fn get_jentry_by_name(
