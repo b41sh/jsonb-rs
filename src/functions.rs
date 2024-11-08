@@ -1494,8 +1494,9 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
     }
 
     /// Insert a new value into a JSONB array value by the specified position.
-    pub fn array_insert(&self, pos: i32, new_value: &[u8], buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn array_insert(&self, pos: i32, new_val: RawJsonb<B>, buf: &mut Vec<u8>) -> Result<(), Error> {
         let value = self.0.as_ref();
+        let new_value = new_val.0.as_ref();
         let header = read_u32(value, 0)?;
         let len = match header & CONTAINER_HEADER_TYPE_MASK {
             ARRAY_CONTAINER_TAG => (header & CONTAINER_HEADER_LEN_MASK) as i32,
