@@ -388,8 +388,9 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         let header = read_u32(self.0.as_ref(), 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
             SCALAR_CONTAINER_TAG => {
-                let jentry = read_u32(self.0.as_ref(), 4)?;
-                match jentry {
+                let jentry_encoded = read_u32(self.0.as_ref(), 4)?;
+                let jentry = JEntry::decode_jentry(jentry_encoded);
+                match jentry.type_code {
                     NULL_TAG => Ok(Some(())),
                     STRING_TAG | NUMBER_TAG | FALSE_TAG | TRUE_TAG | CONTAINER_TAG => Ok(None),
                     _ => Err(Error::InvalidJsonb),
@@ -410,8 +411,9 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         let header = read_u32(self.0.as_ref(), 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
             SCALAR_CONTAINER_TAG => {
-                let jentry = read_u32(self.0.as_ref(), 4)?;
-                match jentry {
+                let jentry_encoded = read_u32(self.0.as_ref(), 4)?;
+                let jentry = JEntry::decode_jentry(jentry_encoded);
+                match jentry.type_code {
                     FALSE_TAG => Ok(Some(false)),
                     TRUE_TAG => Ok(Some(true)),
                     NULL_TAG | STRING_TAG | NUMBER_TAG | CONTAINER_TAG => Ok(None),

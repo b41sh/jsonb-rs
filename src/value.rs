@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::Error;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -207,6 +208,92 @@ impl<'a> Value<'a> {
             _ => None,
         }
     }
+
+    /// Cast `JSONB` value to Boolean
+    pub fn to_bool(&self) -> Result<bool, Error> {
+        if let Some(v) = self.as_bool() {
+            return Ok(v);
+        } else if let Some(v) = self.as_str() {
+            if &v.to_lowercase() == "true" {
+                return Ok(true);
+            } else if &v.to_lowercase() == "false" {
+                return Ok(false);
+            }
+        }
+        Err(Error::InvalidCast)
+    }
+
+    /// Cast `JSONB` value to f64
+    pub fn to_f64(&self) -> Result<f64, Error> {
+        if let Some(v) = self.as_f64() {
+            return Ok(v);
+        } else if let Some(v) = self.as_bool() {
+            if v {
+                return Ok(1_f64);
+            } else {
+                return Ok(0_f64);
+            }
+        } else if let Some(v) = self.as_str() {
+            if let Ok(v) = v.parse::<f64>() {
+                return Ok(v);
+            }
+        }
+        Err(Error::InvalidCast)
+    }
+
+    /// Cast `JSONB` value to i64
+    pub fn to_i64(&self) -> Result<i64, Error> {
+        if let Some(v) = self.as_i64() {
+            return Ok(v);
+        } else if let Some(v) = self.as_bool() {
+            if v {
+                return Ok(1_i64);
+            } else {
+                return Ok(0_i64);
+            }
+        } else if let Some(v) = self.as_str() {
+            if let Ok(v) = v.parse::<i64>() {
+                return Ok(v);
+            }
+        }
+        Err(Error::InvalidCast)
+    }
+
+    /// Cast `JSONB` value to u64
+    pub fn to_u64(&self) -> Result<u64, Error> {
+        if let Some(v) = self.as_u64() {
+            return Ok(v);
+        } else if let Some(v) = self.as_bool() {
+            if v {
+                return Ok(1_u64);
+            } else {
+                return Ok(0_u64);
+            }
+        } else if let Some(v) = self.as_str() {
+            if let Ok(v) = v.parse::<u64>() {
+                return Ok(v);
+            }
+        }
+        Err(Error::InvalidCast)
+    }
+
+    /// Cast `JSONB` value to String
+    pub fn to_str(&self) -> Result<String, Error> {
+        if let Some(v) = self.as_str() {
+            return Ok(v.to_string());
+        } else if let Some(v) = self.as_bool() {
+            if v {
+                return Ok("true".to_string());
+            } else {
+                return Ok("false".to_string());
+            }
+        } else if let Some(v) = self.as_number() {
+            return Ok(format!("{}", v));
+        }
+        Err(Error::InvalidCast)
+    }
+
+
 
     /// Serialize the JSONB Value into a byte stream.
     pub fn write_to_vec(&self, buf: &mut Vec<u8>) {
