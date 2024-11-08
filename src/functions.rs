@@ -157,7 +157,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     }
 
     /// Checks whether the right value contains in the left value.
-    pub fn contains(&self, other: &RawJsonb<B>) -> Result<bool, Error> {
+    pub fn contains(&self, other: RawJsonb<B>) -> Result<bool, Error> {
         let left = self.0.as_ref();
         let right = other.0.as_ref();
         Self::containter_contains(left, right)
