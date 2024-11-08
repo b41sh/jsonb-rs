@@ -19,6 +19,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::mem::discriminant;
+use crate::constants::*;
 
 use super::number::Number;
 use super::ser::Encoder;
@@ -293,7 +294,18 @@ impl<'a> Value<'a> {
         Err(Error::InvalidCast)
     }
 
-
+    /// Returns the type of the top-level JSON value as a text string.
+    /// Possible types are object, array, string, number, boolean, and null.
+    pub fn type_of(&self) -> &'static str {
+        match self {
+            Value::Null => TYPE_NULL,
+            Value::Bool(_) => TYPE_BOOLEAN,
+            Value::String(_) => TYPE_STRING,
+            Value::Number(_) => TYPE_NUMBER,
+            Value::Array(_) => TYPE_ARRAY,
+            Value::Object(_) => TYPE_OBJECT,
+        }
+    }
 
     /// Serialize the JSONB Value into a byte stream.
     pub fn write_to_vec(&self, buf: &mut Vec<u8>) {
