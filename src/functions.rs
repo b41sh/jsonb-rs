@@ -1905,11 +1905,14 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(())
     }
 
-    pub fn delete_by_keypath<'a>(
+    /// Deletes a value from a JSON object by the specified path,
+    /// where path elements can be either field keys or array indexes.
+    pub fn delete_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
         &self,
-        mut keypath: VecDeque<&'a KeyPath<'a>>,
+        keypath: I,
         buf: &mut Vec<u8>,
     ) -> Result<(), Error> {
+        let mut keypath: VecDeque<_> = keypath.collect();
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
