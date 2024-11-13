@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::constants::*;
 use crate::Error;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -19,7 +20,6 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::mem::discriminant;
-use crate::constants::*;
 
 use super::number::Number;
 use super::ser::Encoder;

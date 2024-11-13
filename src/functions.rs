@@ -163,94 +163,93 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Self::containter_contains(left, right)
     }
 
-fn containter_contains(left: &[u8], right: &[u8]) -> Result<bool, Error> {
-    let l_header = read_u32(left, 0)?;
-    let r_header = read_u32(right, 0)?;
+    fn containter_contains(left: &[u8], right: &[u8]) -> Result<bool, Error> {
+        let l_header = read_u32(left, 0)?;
+        let r_header = read_u32(right, 0)?;
 
-    let l_type = l_header & CONTAINER_HEADER_TYPE_MASK;
-    let r_type = r_header & CONTAINER_HEADER_TYPE_MASK;
+        let l_type = l_header & CONTAINER_HEADER_TYPE_MASK;
+        let r_type = r_header & CONTAINER_HEADER_TYPE_MASK;
 
-    // special case for the left array and the right scalar
-    if l_type == ARRAY_CONTAINER_TAG && r_type == SCALAR_CONTAINER_TAG {
-        let r_jentry = JEntry::decode_jentry(read_u32(right, 4)?);
-        return Ok(Self::array_contains(left, l_header, &right[8..], r_jentry));
-    }
+        // special case for the left array and the right scalar
+        if l_type == ARRAY_CONTAINER_TAG && r_type == SCALAR_CONTAINER_TAG {
+            let r_jentry = JEntry::decode_jentry(read_u32(right, 4)?);
+            return Ok(Self::array_contains(left, l_header, &right[8..], r_jentry));
+        }
 
-    if l_type != r_type {
-        return Ok(false);
-    }
+        if l_type != r_type {
+            return Ok(false);
+        }
 
-    match r_type {
-        OBJECT_CONTAINER_TAG => {
-            let l_size = l_header & CONTAINER_HEADER_LEN_MASK;
-            let r_size = r_header & CONTAINER_HEADER_LEN_MASK;
-            if l_size < r_size {
-                return Ok(false);
-            }
-            for (r_key, r_jentry, r_val) in iterate_object_entries(right, r_header) {
-                match get_jentry_by_name(left, 0, l_header, r_key, false) {
-                    Some((l_jentry, _, l_val_offset)) => {
-                        if l_jentry.type_code != r_jentry.type_code {
-                            return Ok(false);
-                        }
-                        let l_val = &left[l_val_offset..l_val_offset + l_jentry.length as usize];
-                        if r_jentry.type_code != CONTAINER_TAG {
-                            if !l_val.eq(r_val) {
+        match r_type {
+            OBJECT_CONTAINER_TAG => {
+                let l_size = l_header & CONTAINER_HEADER_LEN_MASK;
+                let r_size = r_header & CONTAINER_HEADER_LEN_MASK;
+                if l_size < r_size {
+                    return Ok(false);
+                }
+                for (r_key, r_jentry, r_val) in iterate_object_entries(right, r_header) {
+                    match get_jentry_by_name(left, 0, l_header, r_key, false) {
+                        Some((l_jentry, _, l_val_offset)) => {
+                            if l_jentry.type_code != r_jentry.type_code {
                                 return Ok(false);
                             }
-                        } else if !Self::containter_contains(l_val, r_val)? {
+                            let l_val =
+                                &left[l_val_offset..l_val_offset + l_jentry.length as usize];
+                            if r_jentry.type_code != CONTAINER_TAG {
+                                if !l_val.eq(r_val) {
+                                    return Ok(false);
+                                }
+                            } else if !Self::containter_contains(l_val, r_val)? {
+                                return Ok(false);
+                            }
+                        }
+                        None => return Ok(false),
+                    }
+                }
+                Ok(true)
+            }
+            ARRAY_CONTAINER_TAG => {
+                for (r_jentry, r_val) in iterate_array(right, r_header) {
+                    if r_jentry.type_code != CONTAINER_TAG {
+                        if !Self::array_contains(left, l_header, r_val, r_jentry) {
+                            return Ok(false);
+                        }
+                    } else {
+                        let l_nested: Vec<_> = iterate_array(left, l_header)
+                            .filter(|(l_jentry, _)| l_jentry.type_code == CONTAINER_TAG)
+                            .map(|(_, l_val)| l_val)
+                            .collect();
+
+                        let mut contains_nested = false;
+
+                        for l_nested_val in l_nested {
+                            if Self::containter_contains(l_nested_val, r_val)? {
+                                contains_nested = true;
+                                break;
+                            }
+                        }
+                        if !contains_nested {
                             return Ok(false);
                         }
                     }
-                    None => return Ok(false),
                 }
+                Ok(true)
             }
-            Ok(true)
-        }
-        ARRAY_CONTAINER_TAG => {
-            for (r_jentry, r_val) in iterate_array(right, r_header) {
-                if r_jentry.type_code != CONTAINER_TAG {
-                    if !Self::array_contains(left, l_header, r_val, r_jentry) {
-                        return Ok(false);
-                    }
-                } else {
-                    let l_nested: Vec<_> = iterate_array(left, l_header)
-                        .filter(|(l_jentry, _)| l_jentry.type_code == CONTAINER_TAG)
-                        .map(|(_, l_val)| l_val)
-                        .collect();
-
-                    let mut contains_nested = false;
-
-                    for l_nested_val in l_nested {
-                        if Self::containter_contains(l_nested_val, r_val)? {
-                            contains_nested = true;
-                            break;
-                        }
-                    }
-                    if !contains_nested {
-                        return Ok(false);
-                    }
-                }
-            }
-            Ok(true)
-        }
-        _ => Ok(left.eq(right)),
-    }
-}
-
-fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -> bool {
-    for (jentry, arr_val) in iterate_array(arr, arr_header) {
-        if jentry.type_code != val_jentry.type_code {
-            continue;
-        }
-        if val.eq(arr_val) {
-            return true;
+            _ => Ok(left.eq(right)),
         }
     }
-    false
-}
 
-
+    fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -> bool {
+        for (jentry, arr_val) in iterate_array(arr, arr_header) {
+            if jentry.type_code != val_jentry.type_code {
+                continue;
+            }
+            if val.eq(arr_val) {
+                return true;
+            }
+        }
+        false
+    }
 
     /// Get the keys of a `JSONB` object.
     pub fn object_keys(&self) -> Result<Option<Vec<u8>>, Error> {
@@ -1012,13 +1011,15 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         let header = read_u32(value, 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
             ARRAY_CONTAINER_TAG => {
-                let val = get_jentry_by_index(value, 0, header, index).map(|(jentry, encoded, val_offset)| {
-                    extract_by_jentry(&jentry, encoded, val_offset, value)
-                });
+                let val = get_jentry_by_index(value, 0, header, index).map(
+                    |(jentry, encoded, val_offset)| {
+                        extract_by_jentry(&jentry, encoded, val_offset, value)
+                    },
+                );
                 Ok(val)
             }
             SCALAR_CONTAINER_TAG | OBJECT_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -1030,12 +1031,14 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         match header & CONTAINER_HEADER_TYPE_MASK {
             OBJECT_CONTAINER_TAG => {
                 let val = get_jentry_by_name(value, 0, header, name, ignore_case).map(
-                    |(jentry, encoded, val_offset)| extract_by_jentry(&jentry, encoded, val_offset, value),
+                    |(jentry, encoded, val_offset)| {
+                        extract_by_jentry(&jentry, encoded, val_offset, value)
+                    },
                 );
                 Ok(val)
-            },
+            }
             SCALAR_CONTAINER_TAG | ARRAY_CONTAINER_TAG => Ok(None),
-            _ => Err(Error::InvalidJsonb)
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -1101,28 +1104,6 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         Ok(val)
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /// Traverse all the string fields in a jsonb value and check whether the conditions are met.
     pub fn traverse_check_string(&self, func: impl Fn(&[u8]) -> bool) -> Result<bool, Error> {
         let value = self.0.as_ref();
@@ -1167,7 +1148,10 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
     }
 
     /// Checks whether all of the strings exist as top-level keys or array elements.
-    pub fn exists_all_keys<'a, I: Iterator<Item = &'a [u8]>>(&self, keys: I) -> Result<bool, Error> {
+    pub fn exists_all_keys<'a, I: Iterator<Item = &'a [u8]>>(
+        &self,
+        keys: I,
+    ) -> Result<bool, Error> {
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
 
@@ -1185,7 +1169,10 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
     }
 
     /// Checks whether any of the strings exist as top-level keys or array elements.
-    pub fn exists_any_keys<'a, I: Iterator<Item = &'a [u8]>>(&self, keys: I) -> Result<bool, Error> {
+    pub fn exists_any_keys<'a, I: Iterator<Item = &'a [u8]>>(
+        &self,
+        keys: I,
+    ) -> Result<bool, Error> {
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
 
@@ -1225,12 +1212,8 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
                 }
                 Ok(matches)
             }
-            SCALAR_CONTAINER_TAG => {
-                Ok(false)
-            }
-            _ => {
-                Err(Error::InvalidJsonb)
-            }
+            SCALAR_CONTAINER_TAG => Ok(false),
+            _ => Err(Error::InvalidJsonb),
         }
     }
 
@@ -1487,7 +1470,12 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
     }
 
     /// Insert a new value into a JSONB array value by the specified position.
-    pub fn array_insert(&self, pos: i32, new_val: RawJsonb<B>, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn array_insert(
+        &self,
+        pos: i32,
+        new_val: RawJsonb<B>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), Error> {
         let value = self.0.as_ref();
         let new_value = new_val.0.as_ref();
         let header = read_u32(value, 0)?;
@@ -1915,6 +1903,150 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         builder.build_into(buf);
 
         Ok(())
+    }
+
+    fn delete_by_keypath<'a>(
+        &self,
+        mut keypath: VecDeque<&'a KeyPath<'a>>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), Error> {
+        let value = self.0.as_ref();
+        let header = read_u32(value, 0)?;
+        match header & CONTAINER_HEADER_TYPE_MASK {
+            ARRAY_CONTAINER_TAG => {
+                match self.delete_array_by_keypath(value, header, &mut keypath)? {
+                    Some(builder) => {
+                        builder.build_into(buf);
+                    }
+                    None => {
+                        buf.extend_from_slice(value);
+                    }
+                };
+            }
+            OBJECT_CONTAINER_TAG => {
+                match self.delete_object_by_keypath(value, header, &mut keypath)? {
+                    Some(builder) => {
+                        builder.build_into(buf);
+                    }
+                    None => {
+                        buf.extend_from_slice(value);
+                    }
+                }
+            }
+            _ => return Err(Error::InvalidJsonType),
+        }
+        Ok(())
+    }
+
+    fn delete_array_by_keypath<'a, 'b>(
+        &self,
+        value: &'b [u8],
+        header: u32,
+        keypath: &mut VecDeque<&'a KeyPath<'a>>,
+    ) -> Result<Option<ArrayBuilder<'b>>, Error> {
+        let len = (header & CONTAINER_HEADER_LEN_MASK) as i32;
+        match keypath.pop_front() {
+            Some(KeyPath::Index(idx)) => {
+                let idx = if *idx < 0 { len - idx.abs() } else { *idx };
+                if idx < 0 || idx >= len {
+                    return Ok(None);
+                }
+                let mut builder = ArrayBuilder::new(len as usize);
+                let idx = idx as usize;
+                for (i, entry) in iterate_array(value, header).enumerate() {
+                    if i != idx {
+                        builder.push_raw(entry.0, entry.1);
+                    } else if !keypath.is_empty() {
+                        let item_value = entry.1;
+                        match entry.0.type_code {
+                            CONTAINER_TAG => {
+                                let item_header = read_u32(item_value, 0)?;
+                                match item_header & CONTAINER_HEADER_TYPE_MASK {
+                                    ARRAY_CONTAINER_TAG => {
+                                        match self.delete_array_by_keypath(
+                                            item_value,
+                                            item_header,
+                                            keypath,
+                                        )? {
+                                            Some(item_builder) => builder.push_array(item_builder),
+                                            None => return Ok(None),
+                                        }
+                                    }
+                                    OBJECT_CONTAINER_TAG => {
+                                        match self.delete_object_by_keypath(
+                                            item_value,
+                                            item_header,
+                                            keypath,
+                                        )? {
+                                            Some(item_builder) => builder.push_object(item_builder),
+                                            None => return Ok(None),
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            _ => return Ok(None),
+                        }
+                    }
+                }
+                Ok(Some(builder))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn delete_object_by_keypath<'a, 'b>(
+        &self,
+        value: &'b [u8],
+        header: u32,
+        keypath: &mut VecDeque<&'a KeyPath<'a>>,
+    ) -> Result<Option<ObjectBuilder<'b>>, Error> {
+        match keypath.pop_front() {
+            Some(KeyPath::QuotedName(name) | KeyPath::Name(name)) => {
+                let mut builder = ObjectBuilder::new();
+                for (key, jentry, item) in iterate_object_entries(value, header) {
+                    if !key.eq(name) {
+                        builder.push_raw(key, jentry, item);
+                    } else if !keypath.is_empty() {
+                        match jentry.type_code {
+                            CONTAINER_TAG => {
+                                let item_header = read_u32(item, 0)?;
+                                match item_header & CONTAINER_HEADER_TYPE_MASK {
+                                    ARRAY_CONTAINER_TAG => {
+                                        match self.delete_array_by_keypath(
+                                            item,
+                                            item_header,
+                                            keypath,
+                                        )? {
+                                            Some(item_builder) => {
+                                                builder.push_array(key, item_builder)
+                                            }
+                                            None => return Ok(None),
+                                        }
+                                    }
+                                    OBJECT_CONTAINER_TAG => {
+                                        match self.delete_object_by_keypath(
+                                            item,
+                                            item_header,
+                                            keypath,
+                                        )? {
+                                            Some(item_builder) => {
+                                                builder.push_object(key, item_builder)
+                                            }
+                                            None => return Ok(None),
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            _ => return Ok(None),
+                        }
+                    }
+                }
+                Ok(Some(builder))
+            }
+            _ => Ok(None),
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -2593,7 +2725,8 @@ pub fn delete_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
         value.write_to_vec(buf);
         return Ok(());
     }
-    delete_by_keypath_jsonb(value, keypath, buf)
+    //delete_by_keypath_jsonb(value, keypath, buf)
+    Ok(())
 }
 
 fn delete_value_array_by_keypath<'a>(
@@ -2632,142 +2765,6 @@ fn delete_value_object_by_keypath<'a>(
                 _ => {}
             }
         }
-    }
-}
-
-fn delete_by_keypath_jsonb<'a>(
-    value: &[u8],
-    mut keypath: VecDeque<&'a KeyPath<'a>>,
-    buf: &mut Vec<u8>,
-) -> Result<(), Error> {
-    let header = read_u32(value, 0)?;
-    match header & CONTAINER_HEADER_TYPE_MASK {
-        ARRAY_CONTAINER_TAG => {
-            match delete_jsonb_array_by_keypath(value, header, &mut keypath)? {
-                Some(builder) => {
-                    builder.build_into(buf);
-                }
-                None => {
-                    buf.extend_from_slice(value);
-                }
-            };
-        }
-        OBJECT_CONTAINER_TAG => {
-            match delete_jsonb_object_by_keypath(value, header, &mut keypath)? {
-                Some(builder) => {
-                    builder.build_into(buf);
-                }
-                None => {
-                    buf.extend_from_slice(value);
-                }
-            }
-        }
-        _ => return Err(Error::InvalidJsonType),
-    }
-    Ok(())
-}
-
-fn delete_jsonb_array_by_keypath<'a, 'b>(
-    value: &'b [u8],
-    header: u32,
-    keypath: &mut VecDeque<&'a KeyPath<'a>>,
-) -> Result<Option<ArrayBuilder<'b>>, Error> {
-    let len = (header & CONTAINER_HEADER_LEN_MASK) as i32;
-    match keypath.pop_front() {
-        Some(KeyPath::Index(idx)) => {
-            let idx = if *idx < 0 { len - idx.abs() } else { *idx };
-            if idx < 0 || idx >= len {
-                return Ok(None);
-            }
-            let mut builder = ArrayBuilder::new(len as usize);
-            let idx = idx as usize;
-            for (i, entry) in iterate_array(value, header).enumerate() {
-                if i != idx {
-                    builder.push_raw(entry.0, entry.1);
-                } else if !keypath.is_empty() {
-                    let item_value = entry.1;
-                    match entry.0.type_code {
-                        CONTAINER_TAG => {
-                            let item_header = read_u32(item_value, 0)?;
-                            match item_header & CONTAINER_HEADER_TYPE_MASK {
-                                ARRAY_CONTAINER_TAG => {
-                                    match delete_jsonb_array_by_keypath(
-                                        item_value,
-                                        item_header,
-                                        keypath,
-                                    )? {
-                                        Some(item_builder) => builder.push_array(item_builder),
-                                        None => return Ok(None),
-                                    }
-                                }
-                                OBJECT_CONTAINER_TAG => {
-                                    match delete_jsonb_object_by_keypath(
-                                        item_value,
-                                        item_header,
-                                        keypath,
-                                    )? {
-                                        Some(item_builder) => builder.push_object(item_builder),
-                                        None => return Ok(None),
-                                    }
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        _ => return Ok(None),
-                    }
-                }
-            }
-            Ok(Some(builder))
-        }
-        _ => Ok(None),
-    }
-}
-
-fn delete_jsonb_object_by_keypath<'a, 'b>(
-    value: &'b [u8],
-    header: u32,
-    keypath: &mut VecDeque<&'a KeyPath<'a>>,
-) -> Result<Option<ObjectBuilder<'b>>, Error> {
-    match keypath.pop_front() {
-        Some(KeyPath::QuotedName(name) | KeyPath::Name(name)) => {
-            let mut builder = ObjectBuilder::new();
-            for (key, jentry, item) in iterate_object_entries(value, header) {
-                if !key.eq(name) {
-                    builder.push_raw(key, jentry, item);
-                } else if !keypath.is_empty() {
-                    match jentry.type_code {
-                        CONTAINER_TAG => {
-                            let item_header = read_u32(item, 0)?;
-                            match item_header & CONTAINER_HEADER_TYPE_MASK {
-                                ARRAY_CONTAINER_TAG => {
-                                    match delete_jsonb_array_by_keypath(item, item_header, keypath)?
-                                    {
-                                        Some(item_builder) => builder.push_array(key, item_builder),
-                                        None => return Ok(None),
-                                    }
-                                }
-                                OBJECT_CONTAINER_TAG => {
-                                    match delete_jsonb_object_by_keypath(
-                                        item,
-                                        item_header,
-                                        keypath,
-                                    )? {
-                                        Some(item_builder) => {
-                                            builder.push_object(key, item_builder)
-                                        }
-                                        None => return Ok(None),
-                                    }
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        _ => return Ok(None),
-                    }
-                }
-            }
-            Ok(Some(builder))
-        }
-        _ => Ok(None),
     }
 }
 

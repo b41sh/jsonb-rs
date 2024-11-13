@@ -74,7 +74,7 @@ pub struct Selector<'a, B: AsRef<[u8]>> {
 
 impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     pub fn new(json_path: JsonPath<'a>, mode: Mode) -> Self {
-        Self { 
+        Self {
             json_path,
             mode,
             _marker: PhantomData,
