@@ -1905,7 +1905,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(())
     }
 
-    fn delete_by_keypath<'a>(
+    pub fn delete_by_keypath<'a>(
         &self,
         mut keypath: VecDeque<&'a KeyPath<'a>>,
         buf: &mut Vec<u8>,
