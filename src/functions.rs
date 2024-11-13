@@ -955,20 +955,16 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         json.push('\"');
     }
 
-
-
     /// Checks whether the JSON path returns any item for the `JSONB` value.
     pub fn path_exists<'a>(&self, json_path: JsonPath<'a>) -> Result<bool, Error> {
-        let value = self.0.as_ref();
         let selector = Selector::new(json_path, Mode::Mixed);
-        selector.exists(value)
+        selector.exists(self)
     }
 
     /// Returns the result of a JSON path predicate check for the specified `JSONB` value.
     pub fn path_match<'a>(&self, json_path: JsonPath<'a>) -> Result<bool, Error> {
-        let value = self.0.as_ref();
         let selector = Selector::new(json_path, Mode::First);
-        selector.predicate_match(value)
+        selector.predicate_match(self)
     }
 
     /// Get the inner elements of `JSONB` value by JSON path.
@@ -979,9 +975,8 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
     ) -> Result<(), Error> {
-        let value = self.0.as_ref();
         let selector = Selector::new(json_path, Mode::Mixed);
-        selector.select(value, data, offsets)?;
+        selector.select(self, data, offsets)?;
         Ok(())
     }
 
@@ -993,9 +988,8 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
     ) -> Result<(), Error> {
-        let value = self.0.as_ref();
         let selector = Selector::new(json_path, Mode::First);
-        selector.select(value, data, offsets)?;
+        selector.select(self, data, offsets)?;
         Ok(())
     }
 
@@ -1007,9 +1001,8 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
     ) -> Result<(), Error> {
-        let value = self.0.as_ref();
         let selector = Selector::new(json_path, Mode::Array);
-        selector.select(value, data, offsets)?;
+        selector.select(self, data, offsets)?;
         Ok(())
     }
 
@@ -1922,6 +1915,10 @@ fn array_contains(arr: &[u8], arr_header: u32, val: &[u8], val_jentry: JEntry) -
         builder.build_into(buf);
 
         Ok(())
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.as_ref().len()
     }
 }
 

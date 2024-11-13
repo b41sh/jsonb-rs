@@ -30,6 +30,8 @@ use crate::jsonpath::Path;
 use crate::jsonpath::PathValue;
 use crate::number::Number;
 use crate::Error;
+use crate::RawJsonb;
+use std::marker::PhantomData;
 
 use nom::{
     bytes::complete::take, combinator::map, multi::count, number::complete::be_u32, IResult,
@@ -64,19 +66,24 @@ pub enum Mode {
     Mixed,
 }
 
-pub struct Selector<'a> {
+pub struct Selector<'a, B: AsRef<[u8]>> {
     json_path: JsonPath<'a>,
     mode: Mode,
+    _marker: PhantomData<B>,
 }
 
-impl<'a> Selector<'a> {
+impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     pub fn new(json_path: JsonPath<'a>, mode: Mode) -> Self {
-        Self { json_path, mode }
+        Self { 
+            json_path,
+            mode,
+            _marker: PhantomData,
+        }
     }
 
     pub fn select(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
     ) -> Result<(), Error> {
@@ -105,7 +112,7 @@ impl<'a> Selector<'a> {
         Ok(())
     }
 
-    pub fn exists(&'a self, root: &'a [u8]) -> Result<bool, Error> {
+    pub fn exists(&'a self, root: &'a RawJsonb<B>) -> Result<bool, Error> {
         if self.json_path.is_predicate() {
             return Ok(true);
         }
@@ -113,7 +120,7 @@ impl<'a> Selector<'a> {
         Ok(!poses.is_empty())
     }
 
-    pub fn predicate_match(&'a self, root: &'a [u8]) -> Result<bool, Error> {
+    pub fn predicate_match(&'a self, root: &'a RawJsonb<B>) -> Result<bool, Error> {
         if !self.json_path.is_predicate() {
             return Err(Error::InvalidJsonPathPredicate);
         }
@@ -123,7 +130,7 @@ impl<'a> Selector<'a> {
 
     fn find_positions(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         current: Option<&Position>,
         paths: &[Path<'a>],
     ) -> Result<VecDeque<Position>, Error> {
@@ -175,7 +182,7 @@ impl<'a> Selector<'a> {
 
     fn select_path(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         offset: usize,
         length: usize,
         path: &Path<'a>,
@@ -202,11 +209,11 @@ impl<'a> Selector<'a> {
     // select all values in an Object.
     fn select_object_values(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         root_offset: usize,
         poses: &mut VecDeque<Position>,
     ) -> Result<(), Error> {
-        let (rest, (ty, length)) = decode_header(&root[root_offset..])?;
+        let (rest, (ty, length)) = decode_header(&root.0.as_ref()[root_offset..])?;
         if ty != OBJECT_CONTAINER_TAG || length == 0 {
             return Ok(());
         }
@@ -231,12 +238,12 @@ impl<'a> Selector<'a> {
     // select all values in an Array.
     fn select_array_values(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         root_offset: usize,
         root_length: usize,
         poses: &mut VecDeque<Position>,
     ) -> Result<(), Error> {
-        let (rest, (ty, length)) = decode_header(&root[root_offset..])?;
+        let (rest, (ty, length)) = decode_header(&root.0.as_ref()[root_offset..])?;
         if ty != ARRAY_CONTAINER_TAG {
             // In lax mode, bracket wildcard allow Scalar value.
             poses.push_back(Position::Container((root_offset, root_length)));
@@ -259,12 +266,12 @@ impl<'a> Selector<'a> {
     // select value in an Object by key name.
     fn select_by_name(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         root_offset: usize,
         name: &str,
         poses: &mut VecDeque<Position>,
     ) -> Result<(), Error> {
-        let (rest, (ty, length)) = decode_header(&root[root_offset..])?;
+        let (rest, (ty, length)) = decode_header(&root.0.as_ref()[root_offset..])?;
         if ty != OBJECT_CONTAINER_TAG || length == 0 {
             return Ok(());
         }
@@ -278,7 +285,7 @@ impl<'a> Selector<'a> {
                 offset += jlength;
                 continue;
             }
-            let (_, key) = decode_string(&root[offset..], *jlength)?;
+            let (_, key) = decode_string(&root.0.as_ref()[offset..], *jlength)?;
             if name == unsafe { std::str::from_utf8_unchecked(key) } {
                 found = true;
                 idx = i;
@@ -307,12 +314,12 @@ impl<'a> Selector<'a> {
     // select values in an Array by indices.
     fn select_by_indices(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         root_offset: usize,
         indices: &Vec<ArrayIndex>,
         poses: &mut VecDeque<Position>,
     ) -> Result<(), Error> {
-        let (rest, (ty, length)) = decode_header(&root[root_offset..])?;
+        let (rest, (ty, length)) = decode_header(&root.0.as_ref()[root_offset..])?;
         if ty != ARRAY_CONTAINER_TAG || length == 0 {
             return Ok(());
         }
@@ -368,7 +375,7 @@ impl<'a> Selector<'a> {
     }
 
     fn build_values(
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         poses: &mut VecDeque<Position>,
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
@@ -376,14 +383,14 @@ impl<'a> Selector<'a> {
         while let Some(pos) = poses.pop_front() {
             match pos {
                 Position::Container((offset, length)) => {
-                    data.extend_from_slice(&root[offset..offset + length]);
+                    data.extend_from_slice(&root.0.as_ref()[offset..offset + length]);
                 }
                 Position::Scalar((ty, offset, length)) => {
                     data.write_u32::<BigEndian>(SCALAR_CONTAINER_TAG)?;
                     let jentry = ty | length as u32;
                     data.write_u32::<BigEndian>(jentry)?;
                     if length > 0 {
-                        data.extend_from_slice(&root[offset..offset + length]);
+                        data.extend_from_slice(&root.0.as_ref()[offset..offset + length]);
                     }
                 }
             }
@@ -393,7 +400,7 @@ impl<'a> Selector<'a> {
     }
 
     fn build_scalar_array(
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         poses: &mut VecDeque<Position>,
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
@@ -408,12 +415,12 @@ impl<'a> Selector<'a> {
         while let Some(pos) = poses.pop_front() {
             let jentry = match pos {
                 Position::Container((offset, length)) => {
-                    data.extend_from_slice(&root[offset..offset + length]);
+                    data.extend_from_slice(&root.0.as_ref()[offset..offset + length]);
                     CONTAINER_TAG | length as u32
                 }
                 Position::Scalar((ty, offset, length)) => {
                     if length > 0 {
-                        data.extend_from_slice(&root[offset..offset + length]);
+                        data.extend_from_slice(&root.0.as_ref()[offset..offset + length]);
                     }
                     ty | length as u32
                 }
@@ -465,7 +472,7 @@ impl<'a> Selector<'a> {
 
     fn filter_expr(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         pos: &Position,
         expr: &Expr<'a>,
     ) -> Result<bool, Error> {
@@ -497,7 +504,7 @@ impl<'a> Selector<'a> {
 
     fn eval_exists(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         pos: &Position,
         paths: &[Path<'a>],
     ) -> Result<bool, Error> {
@@ -508,7 +515,7 @@ impl<'a> Selector<'a> {
 
     fn convert_expr_val(
         &'a self,
-        root: &'a [u8],
+        root: &'a RawJsonb<B>,
         pos: &Position,
         expr: Expr<'a>,
     ) -> Result<ExprValue<'a>, Error> {
@@ -556,11 +563,11 @@ impl<'a> Selector<'a> {
                             TRUE_TAG => PathValue::Boolean(true),
                             FALSE_TAG => PathValue::Boolean(false),
                             NUMBER_TAG => {
-                                let n = Number::decode(&root[offset..offset + length])?;
+                                let n = Number::decode(&root.0.as_ref()[offset..offset + length])?;
                                 PathValue::Number(n)
                             }
                             STRING_TAG => {
-                                let v = &root[offset..offset + length];
+                                let v = &root.0.as_ref()[offset..offset + length];
                                 PathValue::String(Cow::Owned(unsafe {
                                     String::from_utf8_unchecked(v.to_vec())
                                 }))
