@@ -320,18 +320,34 @@ impl<'a> Value<'a> {
         buf
     }
 
-    pub fn get_by_name_ignore_case(&self, name: &str) -> Option<&Value<'a>> {
+    /// if `ignore_case` is true, enables case-insensitive matching.
+    pub fn get_by_name(&self, name: &str, ignore_case: bool) -> Option<&Value<'a>> {
         match self {
             Value::Object(obj) => match obj.get(name) {
                 Some(val) => Some(val),
                 None => {
-                    for key in obj.keys() {
-                        if name.eq_ignore_ascii_case(key) {
-                            return obj.get(key);
+                    if ignore_case {
+                        for key in obj.keys() {
+                            if name.eq_ignore_ascii_case(key) {
+                                return obj.get(key);
+                            }
                         }
                     }
                     None
                 }
+            },
+            _ => None,
+        }
+    }
+
+    /// Get the inner element of `JSONB` Array by index.
+    pub fn get_by_index(&self, index: usize) -> Option<&Value<'a>> {
+        match self {
+            Value::Array(arr) => {
+                if index >= arr.len() {
+                    return None;
+                }
+                Some(&arr[index])
             },
             _ => None,
         }
