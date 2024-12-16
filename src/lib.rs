@@ -91,4 +91,5 @@ pub use number::Number;
 pub use parser::parse_lazy_value;
 pub use parser::parse_value;
 pub use raw::RawJsonb;
+pub use raw::RawJsonbBuf;
 pub use value::*;

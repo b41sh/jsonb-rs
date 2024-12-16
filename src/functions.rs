@@ -140,7 +140,28 @@ pub fn build_object<'a, K: AsRef<str>>(
 }
 
 impl<B: AsRef<[u8]>> RawJsonb<B> {
-    /// Get the length of `JSONB` array.
+    /// Returns the number of elements in a JSONB array.
+    ///
+    /// This function checks the header of the JSONB data to determine if it represents an array.
+    /// If it is an array, the function returns the number of elements in the array.  If the JSONB
+    /// data is not an array (e.g., it's an object or a scalar value), the function returns `None`.
+    /// An error is returned if the JSONB data is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use jsonb::RawJsonb;
+    ///
+    /// let array_jsonb = Jsonb::from(vec![1, 2, 3]);
+    /// let raw_jsonb = RawJsonb::from(array_jsonb.as_ref());
+    /// let len = raw_jsonb.array_length().unwrap();
+    /// assert_eq!(len, Some(3));
+    ///
+    /// let obj_jsonb = Jsonb::from(serde_json::json!({"a": 1}));
+    /// let raw_jsonb = RawJsonb::from(obj_jsonb.as_ref());
+    /// let len = raw_jsonb.array_length().unwrap();
+    /// assert_eq!(len, None);
+    /// ```
     pub fn array_length(&self) -> Result<Option<usize>, Error> {
         let header = read_u32(self.0.as_ref(), 0)?;
         let len = match header & CONTAINER_HEADER_TYPE_MASK {
