@@ -44,6 +44,7 @@ use rand::distributions::DistString;
 use rand::thread_rng;
 use rand::Rng;
 
+use crate::OwnedJsonb;
 use crate::RawJsonb;
 
 // builtin functions for `JSONB` bytes and `JSON` strings without decode all Values.
@@ -139,7 +140,7 @@ pub fn build_object<'a, K: AsRef<str>>(
     Ok(())
 }
 
-impl<B: AsRef<[u8]>> RawJsonb<B> {
+impl RawJsonb<'_> {
     /// Returns the number of elements in a JSONB array.
     ///
     /// This function checks the header of the JSONB data to determine if it represents an array.
@@ -150,15 +151,15 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     /// # Examples
     ///
     /// ```
-    /// use jsonb::RawJsonb;
+    /// use jsonb::{OwnedJsonb, RawJsonb};
     ///
-    /// let array_jsonb = Jsonb::from(vec![1, 2, 3]);
-    /// let raw_jsonb = RawJsonb::from(array_jsonb.as_ref());
+    /// let arr_jsonb = "[1,2,3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
     /// let len = raw_jsonb.array_length().unwrap();
     /// assert_eq!(len, Some(3));
     ///
-    /// let obj_jsonb = Jsonb::from(serde_json::json!({"a": 1}));
-    /// let raw_jsonb = RawJsonb::from(obj_jsonb.as_ref());
+    /// let obj_jsonb = r#"{"a": 1, "b": {"c": 2, "d": 3}}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
     /// let len = raw_jsonb.array_length().unwrap();
     /// assert_eq!(len, None);
     /// ```
@@ -177,8 +178,48 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(len)
     }
 
-    /// Checks whether the right value contains in the left value.
-    pub fn contains(&self, other: RawJsonb<B>) -> Result<bool, Error> {
+    /// Checks if the JSONB value contains other JSONB value.
+    ///
+    /// Containment is defined as follows:
+    ///
+    /// * **Scalar values:** Two scalar values are considered equal if their byte representations are identical.
+    /// * **Objects:** The self object contains the other object if all key-value pairs in the other object
+    ///   exist in the self object with the same values.  The self object may have additional key-value pairs.
+    /// * **Arrays:** The self array contains the other array if, for every element in the other array, there exists
+    ///   an identical element in the self array.  The self array may have additional elements.  Note that order does
+    ///   **not** matter for containment, and duplicate elements are handled correctly. Nested arrays are also supported.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - The self JSONB value.
+    /// * `other` - The other JSONB value.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` if the self JSONB value contains the other JSONB value.
+    /// * `Ok(false)` if the self JSONB value does not contain the other JSONB value.
+    /// * `Err(Error)` if an error occurred during decoding.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// // Example 1: Array containment
+    /// let left_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let left_raw = left_jsonb.as_raw();
+    /// let right_jsonb = "[3, 1]".parse::<OwnedJsonb>().unwrap();
+    /// let right_raw = right_jsonb.as_raw();
+    /// assert!(left_raw.contains(right_raw).unwrap());
+    ///
+    /// // Example 2: Object containment with nested structures
+    /// let left_jsonb = r#"{"a": 1, "b": {"c": 2, "d": 3}}"#.parse::<OwnedJsonb>().unwrap();
+    /// let left_raw = left_jsonb.as_raw();
+    /// let right_jsonb = r#"{"b": {"c": 2}}"#.parse::<OwnedJsonb>().unwrap();
+    /// let right_raw = right_jsonb.as_raw();
+    /// assert!(left_raw.contains(right_raw).unwrap());
+    /// ```
+    pub fn contains(&self, other: RawJsonb) -> Result<bool, Error> {
         let left = self.0.as_ref();
         let right = other.0.as_ref();
         Self::containter_contains(left, right)
@@ -272,8 +313,47 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         false
     }
 
-    /// Get the keys of a `JSONB` object.
-    pub fn object_keys(&self) -> Result<Option<Vec<u8>>, Error> {
+    /// Returns an `OwnedJsonb` array containing the keys of the JSONB object.
+    ///
+    /// If the JSONB value is an object, this function returns a new `OwnedJsonb` array containing the keys of the object as string values.
+    /// The order of the keys in the returned array is the same as their order in the original object.
+    /// If the JSONB value is not an object (e.g., it's an array or a scalar), this function returns `Ok(None)`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(OwnedJsonb))` - An `OwnedJsonb` representing the array of keys if the input is an object.
+    /// * `Ok(None)` - If the input is not an object.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// // Object keys
+    /// let obj_jsonb = r#"{"a": 1, "b": 2, "c": 3}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// let keys_result = raw_jsonb.object_keys();
+    /// assert!(keys_result.is_ok());
+    ///
+    /// let keys_jsonb = keys_result.unwrap();
+    /// assert_eq!(keys_jsonb.as_ref().map(|k| k.to_string()), Some(r#"["a","b","c"]"#.to_string()));
+    ///
+    /// // Array - returns None
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// let keys_result = raw_jsonb.object_keys();
+    /// assert!(keys_result.is_ok());
+    /// assert!(keys_result.unwrap().is_none());
+    ///
+    /// // Scalar - returns None
+    /// let scalar_jsonb = "1".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = scalar_jsonb.as_raw();
+    /// let keys_result = raw_jsonb.object_keys();
+    /// assert!(keys_result.is_ok());
+    /// assert!(keys_result.unwrap().is_none());
+    /// ```
+    pub fn object_keys(&self) -> Result<Option<OwnedJsonb>, Error> {
         let header = read_u32(self.0.as_ref(), 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
             OBJECT_CONTAINER_TAG => {
@@ -301,21 +381,68 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                     }
                     prev_key_offset = key_offset;
                 }
-                Ok(Some(buf))
+                Ok(Some(OwnedJsonb(buf)))
             }
             ARRAY_CONTAINER_TAG | SCALAR_CONTAINER_TAG => Ok(None),
             _ => Err(Error::InvalidJsonb),
         }
     }
 
-    /// Convert the values of a `JSONB` object to vector of key-value pairs.
-    pub fn object_each(&self) -> Result<Option<Vec<(Vec<u8>, Vec<u8>)>>, Error> {
+    /// Iterates over the key-value pairs of a JSONB object.
+    ///
+    /// If the JSONB value is an object, this function returns a vector of tuples, where each tuple contains
+    /// the key (as a `String`) and the value (as an `OwnedJsonb`) of a key-value pair.
+    /// The order of the key-value pairs in the returned vector is the same as their order in the original object.
+    /// If the JSONB value is not an object (e.g., it's an array or a scalar), this function returns `Ok(None)`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(Vec<(String, OwnedJsonb)>))` - A vector of tuples representing the key-value pairs if the input is an object.
+    /// * `Ok(None)` - If the input is not an object.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data, invalid UTF-8 key).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// // Object iteration
+    /// let obj_jsonb = r#"{"a": 1, "b": "hello", "c": [1, 2]}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// let items_result = raw_jsonb.object_each();
+    /// assert!(items_result.is_ok());
+    ///
+    /// let items = items_result.unwrap().unwrap();
+    /// assert_eq!(items.len(), 3);
+    ///
+    /// assert_eq!(items[0].0, "a");
+    /// assert_eq!(items[0].1.to_string(), "1");
+    /// assert_eq!(items[1].0, "b");
+    /// assert_eq!(items[1].1.to_string(), r#""hello""#);
+    /// assert_eq!(items[2].0, "c");
+    /// assert_eq!(items[2].1.to_string(), r#"[1,2]"#);
+    ///
+    /// // Array - returns None
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// let items_result = raw_jsonb.object_each();
+    /// assert!(items_result.is_ok());
+    /// assert!(items_result.unwrap().is_none());
+    ///
+    /// // Scalar - returns None
+    /// let scalar_jsonb = "1".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = scalar_jsonb.as_raw();
+    /// let items_result = raw_jsonb.object_each();
+    /// assert!(items_result.is_ok());
+    /// assert!(items_result.unwrap().is_none());
+    /// ```
+    pub fn object_each(&self) -> Result<Option<Vec<(String, OwnedJsonb)>>, Error> {
         let header = read_u32(self.0.as_ref(), 0)?;
 
         match header & CONTAINER_HEADER_TYPE_MASK {
             OBJECT_CONTAINER_TAG => {
                 let length = (header & CONTAINER_HEADER_LEN_MASK) as usize;
-                let mut items: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(length);
+                let mut items: Vec<(String, OwnedJsonb)> = Vec::with_capacity(length);
                 let mut jentries: VecDeque<(JEntry, u32)> = VecDeque::with_capacity(length * 2);
                 let mut offset = 4;
 
@@ -325,11 +452,13 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                     jentries.push_back((JEntry::decode_jentry(encoded), encoded));
                 }
 
-                let mut keys: VecDeque<Vec<u8>> = VecDeque::with_capacity(length);
+                let mut keys: VecDeque<String> = VecDeque::with_capacity(length);
                 for _ in 0..length {
                     let (jentry, _) = jentries.pop_front().unwrap();
                     let key_len = jentry.length as usize;
-                    keys.push_back(self.0.as_ref()[offset..offset + key_len].to_vec());
+                    let key_data = self.0.as_ref()[offset..offset + key_len].to_vec();
+                    let key = String::from_utf8(key_data).map_err(|_| Error::InvalidJsonb)?;
+                    keys.push_back(key);
                     offset += key_len;
                 }
 
@@ -337,7 +466,8 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                     let (jentry, encoded) = jentries.pop_front().unwrap();
                     let key = keys.pop_front().unwrap();
                     let val_length = jentry.length as usize;
-                    let val = extract_by_jentry(&jentry, encoded, offset, self.0.as_ref());
+                    let val_data = extract_by_jentry(&jentry, encoded, offset, self.0.as_ref());
+                    let val = OwnedJsonb(val_data);
                     offset += val_length;
                     items.push((key, val));
                 }
@@ -348,8 +478,54 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         }
     }
 
-    /// Convert the values of a `JSONB` array to vector.
-    pub fn array_values(&self) -> Result<Option<Vec<Vec<u8>>>, Error> {
+    /// Extracts the values from a JSONB array.
+    ///
+    /// If the JSONB value is an array, this function returns a vector of `OwnedJsonb` representing the array elements.
+    /// If the JSONB value is not an array (e.g., it's an object or a scalar), this function returns `Ok(None)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - The JSONB value.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(Vec<OwnedJsonb>))` - A vector of `OwnedJsonb` values if the input is an array.
+    /// * `Ok(None)` - If the input is not an array.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// // Array values extraction
+    /// let arr_jsonb = r#"[1, "hello", {"a": 1}]"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// let values_result = raw_jsonb.array_values();
+    /// assert!(values_result.is_ok());
+    ///
+    /// let values = values_result.unwrap().unwrap();
+    /// assert_eq!(values.len(), 3);
+    ///
+    /// assert_eq!(values[0].to_string(), "1");
+    /// assert_eq!(values[1].to_string(), r#""hello""#);
+    /// assert_eq!(values[2].to_string(), r#"{"a":1}"#);
+    ///
+    /// // Object - returns None
+    /// let obj_jsonb = r#"{"a": 1}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// let values_result = raw_jsonb.array_values();
+    /// assert!(values_result.is_ok());
+    /// assert!(values_result.unwrap().is_none());
+    ///
+    /// // Scalar - returns None
+    /// let scalar_jsonb = "1".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = scalar_jsonb.as_raw();
+    /// let values_result = raw_jsonb.array_values();
+    /// assert!(values_result.is_ok());
+    /// assert!(values_result.unwrap().is_none());
+    /// ```
+    pub fn array_values(&self) -> Result<Option<Vec<OwnedJsonb>>, Error> {
         let header = read_u32(self.0.as_ref(), 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
             ARRAY_CONTAINER_TAG => {
@@ -361,7 +537,9 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                     let encoded = read_u32(self.0.as_ref(), jentry_offset)?;
                     let jentry = JEntry::decode_jentry(encoded);
                     let val_length = jentry.length as usize;
-                    let item = extract_by_jentry(&jentry, encoded, val_offset, self.0.as_ref());
+                    let item_data =
+                        extract_by_jentry(&jentry, encoded, val_offset, self.0.as_ref());
+                    let item = OwnedJsonb(item_data);
                     items.push(item);
 
                     jentry_offset += 4;
@@ -374,8 +552,52 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         }
     }
 
-    /// Returns the type of the top-level JSON value as a text string.
-    /// Possible types are object, array, string, number, boolean, and null.
+    /// Determines the type of a JSONB value.
+    ///
+    /// This function returns a string representation of the JSONB value's type.
+    /// The possible return values are:
+    /// * `"null"`
+    /// * `"boolean"`
+    /// * `"number"`
+    /// * `"string"`
+    /// * `"array"`
+    /// * `"object"`
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(&'static str)` - A string slice representing the type of the JSONB value.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// // Type checking
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.type_of().unwrap(), "array");
+    ///
+    /// let obj_jsonb = r#"{"a": 1}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.type_of().unwrap(), "object");
+    ///
+    /// let num_jsonb = "1".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = num_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.type_of().unwrap(), "number");
+    ///
+    /// let string_jsonb = r#""hello""#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = string_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.type_of().unwrap(), "string");
+    ///
+    /// let bool_jsonb = "true".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = bool_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.type_of().unwrap(), "boolean");
+    ///
+    /// let null_jsonb = "null".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = null_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.type_of().unwrap(), "null");
+    /// ```
     pub fn type_of(&self) -> Result<&'static str, Error> {
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
@@ -398,7 +620,29 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         }
     }
 
-    /// Returns true if the `JSONB` is a Null.
+    /// Checks if the JSONB value is null.
+    ///
+    /// This function determines whether the JSONB value represents a JSON `null`.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` if the value is null.
+    /// * `Ok(false)` if the value is not null.
+    /// * `Err(Error)` if an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let null_jsonb = "null".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = null_jsonb.as_raw();
+    /// assert!(raw_jsonb.is_null().unwrap());
+    ///
+    /// let obj_jsonb = r#"{"a": 1}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// assert!(!raw_jsonb.is_null().unwrap());
+    /// ```
     pub fn is_null(&self) -> Result<bool, Error> {
         self.as_null().and_then(|v| Ok(v.is_some()))
     }
@@ -751,7 +995,48 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(json_value)
     }
 
-    /// Convert `JSONB` value to String
+    /// Converts the JSONB value to a JSON string.
+    ///
+    /// This function serializes the JSONB value into a human-readable JSON string representation.
+    /// It handles both container types (objects and arrays) and scalar types. If the JSONB data is invalid,
+    /// it attempts to parse it as text JSON and falls back to "null" if parsing fails.
+    ///
+    /// # Returns
+    ///
+    /// * `String` - The JSON string representation of the value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_string(), "[1,2,3]");
+    ///
+    /// let obj_jsonb = r#"{"a": 1, "b": "hello"}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_string(), r#"{"a":1,"b":"hello"}"#);
+    ///
+    /// let num_jsonb = "123.45".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = num_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_string(), "123.45");
+    ///
+    /// let string_jsonb = r#""hello, world!""#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = string_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_string(), r#""hello, world!""#);
+    ///
+    /// let true_jsonb = "true".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = true_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_string(), "true");
+    ///
+    /// // Example with invalid JSONB data (fallback to text JSON parsing)
+    /// let invalid_jsonb = OwnedJsonb(vec![1, 2, 3, 4]); // Invalid binary JSONB
+    /// let raw_invalid = invalid_jsonb.as_raw();
+    ///
+    /// // It will try to parse it as text JSON, in this case fails and return "null"
+    /// assert_eq!(raw_invalid.to_string(), "null");
+    /// ```
     pub fn to_string(&self) -> String {
         let value = self.0.as_ref();
         let mut json = String::with_capacity(value.len());
@@ -770,7 +1055,43 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         json
     }
 
-    /// Convert `JSONB` value to pretty String
+    /// Converts the JSONB value to a pretty-printed JSON string.
+    ///
+    /// This function serializes the JSONB value into a human-readable JSON string representation with indentation for formatting.
+    /// Like `to_string()`, it handles both container types (objects and arrays) and scalar types.
+    /// If the JSONB data is invalid, it attempts to parse it as text JSON, pretty-prints the result if successful,
+    /// and falls back to "null" if either binary or text JSON parsing fails.
+    ///
+    /// # Returns
+    ///
+    /// * `String` - The pretty-printed JSON string representation of the value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_pretty_string(), "[\n  1,\n  2,\n  3\n]");
+    ///
+    /// let obj_jsonb = r#"{"a": 1, "b": "hello"}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_pretty_string(), "{\n  \"a\": 1,\n  \"b\": \"hello\"\n}");
+    ///
+    /// let num_jsonb = "123.45".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = num_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_pretty_string(), "123.45");
+    ///
+    /// let string_jsonb = r#""hello, world!""#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = string_jsonb.as_raw();
+    /// assert_eq!(raw_jsonb.to_pretty_string(), r#""hello, world!""#);
+    ///
+    /// // Example with invalid JSONB data (fallback to text JSON parsing)
+    /// let invalid_jsonb = OwnedJsonb(vec![1, 2, 3, 4]); // Invalid binary JSONB
+    /// let raw_invalid = invalid_jsonb.as_raw();
+    /// assert_eq!(raw_invalid.to_pretty_string(), "null"); // Fails and returns "null"
+    /// ```
     pub fn to_pretty_string(&self) -> String {
         let value = self.0.as_ref();
         let mut json = String::with_capacity(value.len());
@@ -1026,17 +1347,57 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(())
     }
 
-    /// Get the inner element of `JSONB` Array by index.
-    pub fn get_by_index(&self, index: usize) -> Result<Option<Vec<u8>>, Error> {
+    /// Gets the element at the specified index in a JSONB array.
+    ///
+    /// If the JSONB value is an array, this function returns the element at the given `index` as an `OwnedJsonb`.
+    /// If the `index` is out of bounds, it returns `Ok(None)`.
+    /// If the JSONB value is not an array (e.g., it's an object or a scalar), this function also returns `Ok(None)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The index of the desired element.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(OwnedJsonb))` - The element at the specified index as an `OwnedJsonb` if the input is an array and the index is valid.
+    /// * `Ok(None)` - If the input is not an array, or if the index is out of bounds.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let arr_jsonb = r#"[1, "hello", {"a": 1}]"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    ///
+    /// let element0 = raw_jsonb.get_by_index(0).unwrap();
+    /// assert_eq!(element0.unwrap().to_string(), "1");
+    ///
+    /// let element1 = raw_jsonb.get_by_index(1).unwrap();
+    /// assert_eq!(element1.unwrap().to_string(), r#""hello""#);
+    ///
+    /// let element2 = raw_jsonb.get_by_index(2).unwrap();
+    /// assert_eq!(element2.unwrap().to_string(), r#"{"a":1}"#);
+    ///
+    /// let element3 = raw_jsonb.get_by_index(3).unwrap();
+    /// assert!(element3.is_none()); // Index out of bounds
+    ///
+    /// let obj_jsonb = r#"{"a": 1}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// let element = raw_jsonb.get_by_index(0).unwrap();
+    /// assert!(element.is_none()); // Not an array
+    /// ```
+    pub fn get_by_index(&self, index: usize) -> Result<Option<OwnedJsonb>, Error> {
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
             ARRAY_CONTAINER_TAG => {
-                let val = get_jentry_by_index(value, 0, header, index).map(
-                    |(jentry, encoded, val_offset)| {
+                let val = get_jentry_by_index(value, 0, header, index)
+                    .map(|(jentry, encoded, val_offset)| {
                         extract_by_jentry(&jentry, encoded, val_offset, value)
-                    },
-                );
+                    })
+                    .map(OwnedJsonb);
                 Ok(val)
             }
             SCALAR_CONTAINER_TAG | OBJECT_CONTAINER_TAG => Ok(None),
@@ -1044,18 +1405,64 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         }
     }
 
-    /// Get the inner element of `JSONB` Object by key name,
-    /// if `ignore_case` is true, enables case-insensitive matching.
-    pub fn get_by_name(&self, name: &str, ignore_case: bool) -> Result<Option<Vec<u8>>, Error> {
+    /// Gets the value associated with a given key in a JSONB object.
+    ///
+    /// If the JSONB value is an object, this function searches for a key matching the provided `name`
+    /// and returns the associated value as an `OwnedJsonb`.
+    /// The `ignore_case` parameter controls whether the key search is case-sensitive.
+    /// If the key is not found, it returns `Ok(None)`.
+    /// If the JSONB value is not an object (e.g., it's an array or a scalar), this function also returns `Ok(None)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The key to search for.
+    /// * `ignore_case` - Whether the key search should be case-insensitive.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(OwnedJsonb))` - The value associated with the key as an `OwnedJsonb`, if the input is an object and the key is found.
+    /// * `Ok(None)` - If the input is not an object, or if the key is not found.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let obj_jsonb = r#"{"a": 1, "b": "hello", "c": [1, 2]}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    ///
+    /// let value_a = raw_jsonb.get_by_name("a", false).unwrap();
+    /// assert_eq!(value_a.unwrap().to_string(), "1");
+    ///
+    /// let value_b = raw_jsonb.get_by_name("b", false).unwrap();
+    /// assert_eq!(value_b.unwrap().to_string(), r#""hello""#);
+    ///
+    /// let value_c = raw_jsonb.get_by_name("c", false).unwrap();
+    /// assert_eq!(value_c.unwrap().to_string(), "[1,2]");
+    ///
+    /// let value_d = raw_jsonb.get_by_name("d", false).unwrap();
+    /// assert!(value_d.is_none()); // Key not found
+    ///
+    /// // Case-insensitive search
+    /// let value_a_case_insensitive = raw_jsonb.get_by_name("A", true).unwrap();
+    /// assert_eq!(value_a_case_insensitive.unwrap().to_string(), "1");
+    ///
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// let value = raw_jsonb.get_by_name("a", false).unwrap();
+    /// assert!(value.is_none()); // Not an object
+    /// ```
+    pub fn get_by_name(&self, name: &str, ignore_case: bool) -> Result<Option<OwnedJsonb>, Error> {
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
             OBJECT_CONTAINER_TAG => {
-                let val = get_jentry_by_name(value, 0, header, name, ignore_case).map(
-                    |(jentry, encoded, val_offset)| {
+                let val = get_jentry_by_name(value, 0, header, name, ignore_case)
+                    .map(|(jentry, encoded, val_offset)| {
                         extract_by_jentry(&jentry, encoded, val_offset, value)
-                    },
-                );
+                    })
+                    .map(OwnedJsonb);
                 Ok(val)
             }
             SCALAR_CONTAINER_TAG | ARRAY_CONTAINER_TAG => Ok(None),
@@ -1063,12 +1470,74 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         }
     }
 
-    /// Extracts JSON sub-object at the specified path,
-    /// where path elements can be either field keys or array indexes.
+    /// Gets the value at the specified key path in a JSONB value.
+    ///
+    /// This function traverses the JSONB value according to the provided key path
+    /// and returns the value at the final path element as an `OwnedJsonb`.
+    /// The key path is an iterator of `KeyPath` elements, which can be
+    /// either named keys (for objects) or array indices.
+    ///
+    /// If any element in the key path does not exist or if the type of the current value
+    /// does not match the key path element (e.g., trying to access a named key in an array),
+    /// the function returns `Ok(None)`.
+    /// If the key path is empty, the function returns the original `RawJsonb` value wrapped in `Some`.
+    ///
+    /// # Arguments
+    ///
+    /// * `keypaths` - An iterator of `KeyPath` elements representing the path to traverse.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some(OwnedJsonb))` - The value at the specified key path as an `OwnedJsonb`, if found.
+    /// * `Ok(None)` - If the key path is invalid or leads to a non-existent value.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::borrow::Cow;
+    /// use jsonb::{keypath::KeyPath, OwnedJsonb, RawJsonb};
+    ///
+    /// let jsonb_value = r#"{"a": {"b": [1, 2, 3], "c": "hello"}, "d": [4, 5]}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = jsonb_value.as_raw();
+    ///
+    /// // Accessing nested values
+    /// let path = [KeyPath::Name(Cow::Borrowed("a")), KeyPath::Name(Cow::Borrowed("b")), KeyPath::Index(1)];
+    /// let value = raw_jsonb.get_by_keypath(path.iter()).unwrap();
+    /// assert_eq!(value.unwrap().to_string(), "2");
+    ///
+    /// let path = [KeyPath::Name(Cow::Borrowed("a")), KeyPath::Name(Cow::Borrowed("c"))];
+    /// let value = raw_jsonb.get_by_keypath(path.iter()).unwrap();
+    /// assert_eq!(value.unwrap().to_string(), r#""hello""#);
+    ///
+    /// let path = [KeyPath::Name(Cow::Borrowed("d")), KeyPath::Index(0)];
+    /// let value = raw_jsonb.get_by_keypath(path.iter()).unwrap();
+    /// assert_eq!(value.unwrap().to_string(), "4");
+    ///
+    /// // Invalid key path
+    /// let path = [KeyPath::Name(Cow::Borrowed("a")), KeyPath::Name(Cow::Borrowed("x"))]; // "x" doesn't exist
+    /// let value = raw_jsonb.get_by_keypath(path.iter()).unwrap();
+    /// assert!(value.is_none());
+    ///
+    /// let path = [KeyPath::Name(Cow::Borrowed("a")), KeyPath::Index(0)]; // "a" is an object, not an array
+    /// let value = raw_jsonb.get_by_keypath(path.iter()).unwrap();
+    /// assert!(value.is_none());
+    ///
+    /// // Empty key path - returns the original value
+    /// let value = raw_jsonb.get_by_keypath([].iter()).unwrap();
+    /// assert_eq!(value.unwrap().to_string(), r#"{"a":{"b":[1,2,3],"c":"hello"},"d":[4,5]}"#);
+    ///
+    /// // KeyPath with quoted name
+    /// let jsonb_value = r#"{"a b": 1}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = jsonb_value.as_raw();
+    /// let path = [KeyPath::QuotedName(Cow::Borrowed("a b"))];
+    /// let value = raw_jsonb.get_by_keypath(path.iter()).unwrap();
+    /// assert_eq!(value.unwrap().to_string(), r#"1"#);
+    /// ```
     pub fn get_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
         &self,
         keypaths: I,
-    ) -> Result<Option<Vec<u8>>, Error> {
+    ) -> Result<Option<OwnedJsonb>, Error> {
         let value = self.0.as_ref();
 
         let mut curr_val_offset = 0;
@@ -1118,14 +1587,61 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         }
         // If the key paths is empty, return original value.
         if curr_val_offset == 0 {
-            return Ok(Some(value.to_vec()));
+            return Ok(Some(OwnedJsonb(value.to_vec())));
         }
-        let val = curr_jentry
-            .map(|jentry| extract_by_jentry(&jentry, curr_jentry_encoded, curr_val_offset, value));
+        let val = curr_jentry.map(|jentry| {
+            let val_data = extract_by_jentry(&jentry, curr_jentry_encoded, curr_val_offset, value);
+            OwnedJsonb(val_data)
+        });
         Ok(val)
     }
 
-    /// Traverse all the string fields in a jsonb value and check whether the conditions are met.
+    /// Traverses the JSONB value and checks string values against a provided function.
+    ///
+    /// This function recursively traverses the JSONB value, visiting all string elements.
+    /// For each string element, it calls the provided `func`.  If `func` returns `true` for any string element,
+    /// the traversal stops, and the function returns `Ok(true)`. If `func` returns `false` for all string elements,
+    /// the traversal completes, and the function returns `Ok(false)`.
+    ///
+    /// This function is useful for efficiently searching for a specific string within a potentially complex JSONB structure
+    /// without having to manually traverse the entire structure.
+    ///
+    /// # Arguments
+    ///
+    /// * `func` - A function that takes a byte slice (`&[u8]`) representing a string value and returns a boolean indicating whether the string satisfies a certain condition.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If `func` returns `true` for any string element encountered during traversal.
+    /// * `Ok(false)` - If `func` returns `false` for all string elements.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let jsonb_value = r#"{"a": "hello", "b": [1, "world", {"c": "rust"}]}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = jsonb_value.as_raw();
+    ///
+    /// // Check if any string contains "rust"
+    /// let contains_rust = raw_jsonb.traverse_check_string(|s| s.contains(&b"rust")).unwrap();
+    /// assert!(contains_rust);
+    ///
+    /// // Check if any string contains "xyz"
+    /// let contains_xyz = raw_jsonb.traverse_check_string(|s| s.contains(&b"xyz")).unwrap();
+    /// assert!(!contains_xyz);
+    ///
+    /// // Check if any string is longer than 5 characters
+    /// let long_string = raw_jsonb.traverse_check_string(|s| s.len() > 5).unwrap();
+    /// assert!(long_string);
+    ///
+    /// // Example with an array of strings
+    /// let jsonb_value = r#"["hello", "world", "rust"]"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = jsonb_value.as_raw();
+    /// let contains_rust = raw_jsonb.traverse_check_string(|s| s.contains(&b"rust")).unwrap();
+    /// assert!(contains_rust);
+    /// ```
     pub fn traverse_check_string(&self, func: impl Fn(&[u8]) -> bool) -> Result<bool, Error> {
         let value = self.0.as_ref();
         let mut offsets = VecDeque::new();
@@ -1168,7 +1684,49 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(false)
     }
 
-    /// Checks whether all of the strings exist as top-level keys or array elements.
+    /// Checks if all specified keys exist in a JSONB object.
+    ///
+    /// This function checks if a JSONB object contains *all* of the keys provided in the `keys` iterator.
+    /// The keys are expected to be UTF-8 encoded byte slices. If the JSONB value is not an object,
+    /// the function will return `Ok(false)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `keys` - An iterator of byte slices representing the keys to check for.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If all keys exist in the JSONB object.
+    /// * `Ok(false)` - If any of the keys do not exist in the object, if any key is not valid UTF-8, or if the JSONB value is not an object.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data other than the value not being an object).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let obj_jsonb = r#"{"a": 1, "b": 2, "c": 3}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    ///
+    /// let keys = [b"a", b"b", b"c"];
+    /// assert!(raw_jsonb.exists_all_keys(keys.iter()).unwrap());
+    ///
+    /// let keys = [b"a", b"b", b"d"];
+    /// assert!(!raw_jsonb.exists_all_keys(keys.iter()).unwrap()); // "d" does not exist
+    ///
+    /// let keys = [b"a", b"b", &[byte::from(0xff)]];  // Invalid UTF-8
+    /// assert!(!raw_jsonb.exists_all_keys(keys.iter()).unwrap());
+    ///
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// let keys = [b"a"];
+    /// assert!(!raw_jsonb.exists_all_keys(keys.iter()).unwrap()); // Not an object
+    ///
+    /// let obj_jsonb = r#"{"a b": 1, "c": 2}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// let keys = [b"a b", b"c"];
+    /// assert!(raw_jsonb.exists_all_keys(keys.iter()).unwrap());
+    /// ```
     pub fn exists_all_keys<'a, I: Iterator<Item = &'a [u8]>>(
         &self,
         keys: I,
@@ -1189,7 +1747,49 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         Ok(true)
     }
 
-    /// Checks whether any of the strings exist as top-level keys or array elements.
+    /// Checks if any of the specified keys exist in a JSONB object.
+    ///
+    /// This function checks if a JSONB object contains *any* of the keys provided in the `keys` iterator.
+    /// The keys are expected to be UTF-8 encoded byte slices.
+    /// If the JSONB value is not an object, the function will return `Ok(false)`.
+    ///
+    /// # Arguments
+    ///
+    /// * `keys` - An iterator of byte slices representing the keys to check for.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - If any of the keys exist in the JSONB object.
+    /// * `Ok(false)` - If none of the keys exist in the object, if any key is not valid UTF-8, or if the JSONB value is not an object.
+    /// * `Err(Error)` - If an error occurred during decoding (e.g., invalid JSONB data other than the value not being an object).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use jsonb::{OwnedJsonb, RawJsonb};
+    ///
+    /// let obj_jsonb = r#"{"a": 1, "b": 2, "c": 3}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    ///
+    /// let keys = [b"a", b"d", b"e"];
+    /// assert!(raw_jsonb.exists_any_keys(keys.iter()).unwrap()); // "a" exists
+    ///
+    /// let keys = [b"d", b"e", b"f"];
+    /// assert!(!raw_jsonb.exists_any_keys(keys.iter()).unwrap()); // None of the keys exist
+    ///
+    /// let keys = [b"d", &[0xff_u8], b"f"]; // Invalid UTF-8 for the second key
+    /// assert!(!raw_jsonb.exists_any_keys(keys.iter()).unwrap()); // Stops at invalid UTF-8 and returns false
+    ///
+    /// let arr_jsonb = "[1, 2, 3]".parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = arr_jsonb.as_raw();
+    /// let keys = [b"a"];
+    /// assert!(!raw_jsonb.exists_any_keys(keys.iter()).unwrap()); // Not an object
+    ///
+    /// let obj_jsonb = r#"{"a b": 1, "c": 2}"#.parse::<OwnedJsonb>().unwrap();
+    /// let raw_jsonb = obj_jsonb.as_raw();
+    /// let keys = [b"a b"];
+    /// assert!(raw_jsonb.exists_any_keys(keys.iter()).unwrap());
+    /// ```
     pub fn exists_any_keys<'a, I: Iterator<Item = &'a [u8]>>(
         &self,
         keys: I,
@@ -1241,7 +1841,8 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     /// Concatenates two jsonb values. Concatenating two arrays generates an array containing all the elements of each input.
     /// Concatenating two objects generates an object containing the union of their keys, taking the second object's value when there are duplicate keys.
     /// All other cases are treated by converting a non-array input into a single-element array, and then proceeding as for two arrays.
-    pub fn concat(&self, other: RawJsonb<B>, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn concat(&self, other: RawJsonb) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let left = self.0.as_ref();
         let right = other.0.as_ref();
 
@@ -1263,7 +1864,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 for (key, jentry, item) in iterate_object_entries(right, right_header) {
                     builder.push_raw(key, jentry, item);
                 }
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             (ARRAY_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
                 let mut builder = ArrayBuilder::new(left_len + right_len);
@@ -1273,7 +1874,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 for (jentry, item) in iterate_array(right, right_header) {
                     builder.push_raw(jentry, item);
                 }
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             (OBJECT_CONTAINER_TAG | SCALAR_CONTAINER_TAG, ARRAY_CONTAINER_TAG) => {
                 let mut builder = ArrayBuilder::new(right_len + 1);
@@ -1290,7 +1891,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 for (jentry, item) in iterate_array(right, right_header) {
                     builder.push_raw(jentry, item);
                 }
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             (ARRAY_CONTAINER_TAG, OBJECT_CONTAINER_TAG | SCALAR_CONTAINER_TAG) => {
                 let mut builder = ArrayBuilder::new(left_len + 1);
@@ -1307,7 +1908,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                         builder.push_raw(jentry, &right[8..]);
                     }
                 };
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             (OBJECT_CONTAINER_TAG, SCALAR_CONTAINER_TAG) => {
                 let mut builder = ArrayBuilder::new(2);
@@ -1315,7 +1916,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 builder.push_raw(jentry, left);
                 let jentry = JEntry::decode_jentry(read_u32(right, 4)?);
                 builder.push_raw(jentry, &right[8..]);
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             (SCALAR_CONTAINER_TAG, OBJECT_CONTAINER_TAG) => {
                 let mut builder = ArrayBuilder::new(2);
@@ -1323,7 +1924,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 builder.push_raw(jentry, &left[8..]);
                 let jentry = JEntry::make_container_jentry(right.len());
                 builder.push_raw(jentry, right);
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             (SCALAR_CONTAINER_TAG, SCALAR_CONTAINER_TAG) => {
                 let mut builder = ArrayBuilder::new(2);
@@ -1331,36 +1932,37 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 builder.push_raw(jentry, &left[8..]);
                 let jentry = JEntry::decode_jentry(read_u32(right, 4)?);
                 builder.push_raw(jentry, &right[8..]);
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             (_, _) => {
                 return Err(Error::InvalidJsonb);
             }
         }
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Deletes all object fields that have null values from the given JSON value, recursively.
     /// Null values that are not object fields are untouched.
-    pub fn strip_nulls(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn strip_nulls(&self) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
 
         match header & CONTAINER_HEADER_TYPE_MASK {
             OBJECT_CONTAINER_TAG => {
                 let builder = Self::strip_nulls_object(header, value)?;
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             ARRAY_CONTAINER_TAG => {
                 let builder = Self::strip_nulls_array(header, value)?;
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             SCALAR_CONTAINER_TAG => buf.extend_from_slice(value),
             _ => {
                 return Err(Error::InvalidJsonb);
             }
         }
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     fn strip_nulls_array<'a>(header: u32, value: &'a [u8]) -> Result<ArrayBuilder<'a>, Error> {
@@ -1425,7 +2027,8 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     }
 
     /// Deletes a key (and its value) from a JSON object, or matching string value(s) from a JSON array.
-    pub fn delete_by_name(&self, name: &str, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn delete_by_name(&self, name: &str) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
 
@@ -1437,7 +2040,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                         builder.push_raw(key, jentry, item);
                     }
                 }
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             ARRAY_CONTAINER_TAG => {
                 let mut builder = ArrayBuilder::new((header & CONTAINER_HEADER_LEN_MASK) as usize);
@@ -1453,16 +2056,17 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                         builder.push_raw(jentry, item);
                     }
                 }
-                builder.build_into(buf);
+                builder.build_into(&mut buf);
             }
             SCALAR_CONTAINER_TAG => return Err(Error::InvalidJsonType),
             _ => return Err(Error::InvalidJsonb),
         }
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Deletes the array element with specified index (negative integers count from the end).
-    pub fn delete_by_index(&self, index: i32, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn delete_by_index(&self, index: i32) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
 
@@ -1481,22 +2085,18 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                             builder.push_raw(entry.0, entry.1);
                         }
                     }
-                    builder.build_into(buf);
+                    builder.build_into(&mut buf);
                 }
             }
             SCALAR_CONTAINER_TAG | OBJECT_CONTAINER_TAG => return Err(Error::InvalidJsonType),
             _ => return Err(Error::InvalidJsonb),
         }
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Insert a new value into a JSONB array value by the specified position.
-    pub fn array_insert(
-        &self,
-        pos: i32,
-        new_val: RawJsonb<B>,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), Error> {
+    pub fn array_insert(&self, pos: i32, new_val: RawJsonb) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
         let new_value = new_val.0.as_ref();
         let header = read_u32(value, 0)?;
@@ -1564,13 +2164,14 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         while let Some((jentry, item)) = items.pop_front() {
             builder.push_raw(jentry, item);
         }
-        builder.build_into(buf);
+        builder.build_into(&mut buf);
 
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Return a JSONB Array that contains only the distinct elements from the input JSONB Array.
-    pub fn array_distinct(&self, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn array_distinct(&self) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
         let mut builder = ArrayBuilder::new(0);
@@ -1597,13 +2198,14 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 return Err(Error::InvalidJsonb);
             }
         }
-        builder.build_into(buf);
+        builder.build_into(&mut buf);
 
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Return a JSONB Array that contains the matching elements in the two input JSONB Arrays.
-    pub fn array_intersection(&self, other: RawJsonb<B>, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn array_intersection(&self, other: RawJsonb) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let left = self.0.as_ref();
         let right = other.0.as_ref();
 
@@ -1664,14 +2266,15 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 return Err(Error::InvalidJsonb);
             }
         }
-        builder.build_into(buf);
+        builder.build_into(&mut buf);
 
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Return a JSONB Array that contains the elements from one input JSONB Array
     /// that are not in another input JSONB Array.
-    pub fn array_except(&self, other: RawJsonb<B>, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn array_except(&self, other: RawJsonb) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let left = self.0.as_ref();
         let right = other.0.as_ref();
 
@@ -1733,14 +2336,14 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
                 return Err(Error::InvalidJsonb);
             }
         }
-        builder.build_into(buf);
+        builder.build_into(&mut buf);
 
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Compares whether two JSONB Arrays have at least one element in common.
     /// Return TRUE if there is at least one element in common; otherwise return FALSE.
-    pub fn array_overlap(&self, other: RawJsonb<B>) -> Result<bool, Error> {
+    pub fn array_overlap(&self, other: RawJsonb) -> Result<bool, Error> {
         let left = self.0.as_ref();
         let right = other.0.as_ref();
 
@@ -1803,10 +2406,10 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     pub fn object_insert(
         &self,
         new_key: &str,
-        new_val: RawJsonb<B>,
+        new_val: RawJsonb,
         update_flag: bool,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), Error> {
+    ) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
         let new_value = new_val.0.as_ref();
 
@@ -1868,13 +2471,14 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
         for (key, jentry, item) in obj_iter {
             builder.push_raw(key, jentry, item);
         }
-        builder.build_into(buf);
+        builder.build_into(&mut buf);
 
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Delete keys and values from a JSONB object value by keys.
-    pub fn object_delete(&self, keys: &BTreeSet<&str>, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn object_delete(&self, keys: &BTreeSet<&str>) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
         match header & CONTAINER_HEADER_TYPE_MASK {
@@ -1894,13 +2498,14 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
             }
             builder.push_raw(key, jentry, item);
         }
-        builder.build_into(buf);
+        builder.build_into(&mut buf);
 
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Pick keys and values from a JSONB object value by keys.
-    pub fn object_pick(&self, keys: &BTreeSet<&str>, buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub fn object_pick(&self, keys: &BTreeSet<&str>) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let value = self.0.as_ref();
 
         let header = read_u32(value, 0)?;
@@ -1921,9 +2526,9 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
             }
             builder.push_raw(key, jentry, item);
         }
-        builder.build_into(buf);
+        builder.build_into(&mut buf);
 
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     /// Deletes a value from a JSON object by the specified path,
@@ -1931,8 +2536,8 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
     pub fn delete_by_keypath<'a, I: Iterator<Item = &'a KeyPath<'a>>>(
         &self,
         keypath: I,
-        buf: &mut Vec<u8>,
-    ) -> Result<(), Error> {
+    ) -> Result<OwnedJsonb, Error> {
+        let mut buf = Vec::new();
         let mut keypath: VecDeque<_> = keypath.collect();
         let value = self.0.as_ref();
         let header = read_u32(value, 0)?;
@@ -1940,7 +2545,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
             ARRAY_CONTAINER_TAG => {
                 match self.delete_array_by_keypath(value, header, &mut keypath)? {
                     Some(builder) => {
-                        builder.build_into(buf);
+                        builder.build_into(&mut buf);
                     }
                     None => {
                         buf.extend_from_slice(value);
@@ -1950,7 +2555,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
             OBJECT_CONTAINER_TAG => {
                 match self.delete_object_by_keypath(value, header, &mut keypath)? {
                     Some(builder) => {
-                        builder.build_into(buf);
+                        builder.build_into(&mut buf);
                     }
                     None => {
                         buf.extend_from_slice(value);
@@ -1959,7 +2564,7 @@ impl<B: AsRef<[u8]>> RawJsonb<B> {
             }
             _ => return Err(Error::InvalidJsonType),
         }
-        Ok(())
+        Ok(OwnedJsonb(buf))
     }
 
     fn delete_array_by_keypath<'a, 'b>(

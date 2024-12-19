@@ -348,7 +348,7 @@ impl<'a> Value<'a> {
                     return None;
                 }
                 Some(&arr[index])
-            },
+            }
             _ => None,
         }
     }

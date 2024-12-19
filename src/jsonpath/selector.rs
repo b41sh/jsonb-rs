@@ -66,24 +66,19 @@ pub enum Mode {
     Mixed,
 }
 
-pub struct Selector<'a, B: AsRef<[u8]>> {
+pub struct Selector<'a> {
     json_path: JsonPath<'a>,
     mode: Mode,
-    _marker: PhantomData<B>,
 }
 
-impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
+impl<'a> Selector<'a> {
     pub fn new(json_path: JsonPath<'a>, mode: Mode) -> Self {
-        Self {
-            json_path,
-            mode,
-            _marker: PhantomData,
-        }
+        Self { json_path, mode }
     }
 
     pub fn select(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
     ) -> Result<(), Error> {
@@ -112,7 +107,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
         Ok(())
     }
 
-    pub fn exists(&'a self, root: &'a RawJsonb<B>) -> Result<bool, Error> {
+    pub fn exists(&'a self, root: &'a RawJsonb) -> Result<bool, Error> {
         if self.json_path.is_predicate() {
             return Ok(true);
         }
@@ -120,7 +115,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
         Ok(!poses.is_empty())
     }
 
-    pub fn predicate_match(&'a self, root: &'a RawJsonb<B>) -> Result<bool, Error> {
+    pub fn predicate_match(&'a self, root: &'a RawJsonb) -> Result<bool, Error> {
         if !self.json_path.is_predicate() {
             return Err(Error::InvalidJsonPathPredicate);
         }
@@ -130,7 +125,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
 
     fn find_positions(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         current: Option<&Position>,
         paths: &[Path<'a>],
     ) -> Result<VecDeque<Position>, Error> {
@@ -182,7 +177,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
 
     fn select_path(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         offset: usize,
         length: usize,
         path: &Path<'a>,
@@ -209,7 +204,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     // select all values in an Object.
     fn select_object_values(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         root_offset: usize,
         poses: &mut VecDeque<Position>,
     ) -> Result<(), Error> {
@@ -238,7 +233,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     // select all values in an Array.
     fn select_array_values(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         root_offset: usize,
         root_length: usize,
         poses: &mut VecDeque<Position>,
@@ -266,7 +261,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     // select value in an Object by key name.
     fn select_by_name(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         root_offset: usize,
         name: &str,
         poses: &mut VecDeque<Position>,
@@ -314,7 +309,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     // select values in an Array by indices.
     fn select_by_indices(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         root_offset: usize,
         indices: &Vec<ArrayIndex>,
         poses: &mut VecDeque<Position>,
@@ -375,7 +370,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     }
 
     fn build_values(
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         poses: &mut VecDeque<Position>,
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
@@ -400,7 +395,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
     }
 
     fn build_scalar_array(
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         poses: &mut VecDeque<Position>,
         data: &mut Vec<u8>,
         offsets: &mut Vec<u64>,
@@ -472,7 +467,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
 
     fn filter_expr(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         pos: &Position,
         expr: &Expr<'a>,
     ) -> Result<bool, Error> {
@@ -504,7 +499,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
 
     fn eval_exists(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         pos: &Position,
         paths: &[Path<'a>],
     ) -> Result<bool, Error> {
@@ -515,7 +510,7 @@ impl<'a, B: AsRef<[u8]>> Selector<'a, B> {
 
     fn convert_expr_val(
         &'a self,
-        root: &'a RawJsonb<B>,
+        root: &'a RawJsonb,
         pos: &Position,
         expr: Expr<'a>,
     ) -> Result<ExprValue<'a>, Error> {

@@ -13,81 +13,70 @@
 // limitations under the License.
 
 use crate::error::Error;
-use std::str::FromStr;
 use crate::parse_value;
-use std::marker::PhantomData;
+use std::str::FromStr;
 
+pub struct RawJsonb<'a>(pub &'a [u8]);
 
-pub struct RawJsonb<B: AsRef<[u8]>>(pub B);
-
-impl<B: AsRef<[u8]>> RawJsonb<B> {
-    pub fn new(data: B) -> Self {
+impl<'a> RawJsonb<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
         Self(data)
     }
 }
 
-
-/**
-impl TryFrom<RawJsonBuf> for RawJsonb {
-    type Error = Error;
-
-    fn try_from(raw: RawJsonBuf) -> Result<RawJsonb> {
-        RawJsonb(raw.as_ref())
+impl<'a> From<&'a [u8]> for RawJsonb<'a> {
+    fn from(data: &'a [u8]) -> Self {
+        Self(data)
     }
 }
 
-impl TryFrom<&RawJsonb> for RawJsonBuf {
-    type Error = Error;
-
-    fn try_from(doc: &RawJsonb) -> Result<RawJsonBuf> {
-        RawJsonBuf::new(doc)
+impl<'a> AsRef<[u8]> for RawJsonb<'a> {
+    fn as_ref(&self) -> &[u8] {
+        self.0
     }
 }
-*/
 
-//impl<B: AsRef<[u8]>> AsRef<RawJsonb<B>> for RawJsonBuf {
-//    fn as_ref(&self) -> &RawJsonb<B> {
-//        //RawJsonb(self.data.as_ref())
-//        RawJsonb(unsafe { &*(self.data.as_ref() as *const [u8] as *const RawJsonb<B>) })
-//    }
-//}
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnedJsonb(pub Vec<u8>);
 
-
-pub struct RawJsonbBuf<B: AsRef<[u8]>> {
-    data: Vec<u8>,
-    _phantom: PhantomData<B>,
+impl OwnedJsonb {
+    pub fn as_raw(&self) -> RawJsonb<'_> {
+        RawJsonb(self.0.as_slice())
+    }
 }
 
-impl<B: AsRef<[u8]>> FromStr for RawJsonbBuf<B> {
+impl From<&[u8]> for OwnedJsonb {
+    fn from(data: &[u8]) -> Self {
+        Self(data.to_vec())
+    }
+}
+
+impl From<Vec<u8>> for OwnedJsonb {
+    fn from(data: Vec<u8>) -> Self {
+        Self(data)
+    }
+}
+
+impl FromStr for OwnedJsonb {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let value = parse_value(s.as_bytes())?;
         let mut data = Vec::new();
         value.write_to_vec(&mut data);
-        Ok(Self {
-            data,
-            _phantom: PhantomData
-        })
+        Ok(Self(data))
     }
 }
 
-/**
-impl<B: AsRef<[u8]>> AsRef<RawJsonb<B>> for RawJsonbBuf {
-    fn as_ref(&self) -> &RawJsonb<B> {
-        RawJsonb::new(&self.data)
-    }
-}
-*/
-
-//impl<B: AsRef<[u8]> + std::convert::From<std::vec::Vec<u8>>> RawJsonbBuf<B> {
-//impl<B: AsRef<[u8]>> RawJsonbBuf<B> {
-//impl<B: AsRef<[u8]> + std::convert::From<&[u8]>> RawJsonbBuf<B> {
-impl<B: AsRef<[u8]> + for<'a> std::convert::From<&'a [u8]>> RawJsonbBuf<B> {
-    fn to_raw_jsonb(&self) -> RawJsonb<B> {
-        RawJsonb(self.data.as_slice().into())
+impl ToString for OwnedJsonb {
+    fn to_string(&self) -> String {
+        let raw_jsonb = self.as_raw();
+        raw_jsonb.to_string()
     }
 }
 
-
-
+impl AsRef<[u8]> for OwnedJsonb {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
